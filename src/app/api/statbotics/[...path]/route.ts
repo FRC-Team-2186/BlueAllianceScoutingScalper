@@ -1,17 +1,136 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  StatboticsApiError,
+  EMPTY_EPA_RESPONSE,
+  getTeam,
+  isEmptyPayload,
   proxyStatboticsRequest,
+  statboticsFetchOrNull,
+  teamPayloadFromOverall,
+  type QueryParams,
 } from "@/lib/api/statbotics-client";
 
 type RouteContext = {
   params: Promise<{ path: string[] }>;
 };
 
+function emptyEpaJson(extra: Record<string, unknown> = {}) {
+  return NextResponse.json(
+    {
+      ...EMPTY_EPA_RESPONSE,
+      ...extra,
+    },
+    { status: 200 },
+  );
+}
+
+function parseTeamNumber(value: string | undefined): number | null {
+  if (!value) return null;
+  const team = Number.parseInt(value, 10);
+  return Number.isFinite(team) && team > 0 ? team : null;
+}
+
+/**
+ * Resolve team metrics with cascading fallbacks:
+ * event-specific → team_year → overall /team/{n}
+ * Never throws; returns nulls when Statbotics has no data (common for 2026).
+ */
+async function resolveTeamMetrics(options: {
+  team: number;
+  eventKey?: string;
+  year?: number;
+}): Promise<Record<string, unknown>> {
+  const { team, eventKey, year } = options;
+
+  if (eventKey) {
+    const eventData =
+      (await statboticsFetchOrNull<Record<string, unknown>>(
+        `/team_event/${team}/${eventKey}`,
+      )) ??
+      (
+        await statboticsFetchOrNull<Record<string, unknown>[]>("/team_events", {
+          team,
+          event: eventKey,
+          limit: 1,
+        })
+      )?.[0];
+
+    if (eventData && !isEmptyPayload(eventData)) {
+      console.log("[Statbotics proxy] using team_event data", { team, eventKey });
+      return {
+        ...eventData,
+        epa:
+          (eventData.norm_epa as { current?: number; mean?: number } | undefined)
+            ?.mean ??
+          (eventData.epa as { mean?: number } | undefined)?.mean ??
+          null,
+        win_rate:
+          (eventData.record as { winrate?: number } | undefined)?.winrate ?? null,
+        _fallback: "event",
+      };
+    }
+
+    console.warn(
+      "[Statbotics proxy] event EPA missing; falling back to team endpoint",
+      { team, eventKey },
+    );
+  }
+
+  if (year) {
+    const yearData =
+      (await statboticsFetchOrNull<Record<string, unknown>>(
+        `/team_year/${team}/${year}`,
+      )) ??
+      (
+        await statboticsFetchOrNull<Record<string, unknown>[]>("/team_years", {
+          team,
+          year,
+          limit: 1,
+        })
+      )?.[0];
+
+    if (yearData && !isEmptyPayload(yearData)) {
+      console.log("[Statbotics proxy] using team_year data", { team, year });
+      return {
+        ...yearData,
+        epa:
+          (yearData.norm_epa as { current?: number; mean?: number } | undefined)
+            ?.mean ??
+          (yearData.epa as { mean?: number } | undefined)?.mean ??
+          null,
+        win_rate:
+          (yearData.record as { winrate?: number } | undefined)?.winrate ?? null,
+        _fallback: "team-year",
+      };
+    }
+  }
+
+  const overall = await getTeam(team);
+  if (overall) {
+    console.log("[Statbotics proxy] using overall team endpoint", { team });
+    return teamPayloadFromOverall(overall);
+  }
+
+  console.warn("[Statbotics proxy] no Statbotics data available", {
+    team,
+    eventKey,
+    year,
+  });
+  return {
+    ...EMPTY_EPA_RESPONSE,
+    team,
+    event: eventKey ?? null,
+    year: year ?? null,
+    _fallback: "none",
+  };
+}
+
 export async function GET(request: NextRequest, context: RouteContext) {
   const { path } = await context.params;
-  const statboticsPath = `/${path.join("/")}`;
-  const params = Object.fromEntries(request.nextUrl.searchParams.entries());
+  const segments = path;
+  const statboticsPath = `/${segments.join("/")}`;
+  const params = Object.fromEntries(
+    request.nextUrl.searchParams.entries(),
+  ) as QueryParams;
   const requestedUrl = `${statboticsPath}${request.nextUrl.search}`;
 
   console.log("[Statbotics proxy] request", {
@@ -21,38 +140,126 @@ export async function GET(request: NextRequest, context: RouteContext) {
   });
 
   try {
-    const data = await proxyStatboticsRequest(statboticsPath, params);
-    console.log("[Statbotics proxy] success", {
-      requestedUrl,
-      empty:
-        data == null ||
-        (typeof data === "object" && Object.keys(data as object).length === 0),
-    });
-    return NextResponse.json(data);
-  } catch (error) {
-    if (error instanceof StatboticsApiError) {
-      console.error("[Statbotics proxy] upstream error", {
-        requestedUrl,
-        status: error.status,
-        path: error.path,
-        upstreamUrl: error.url,
-        message: error.message.slice(0, 300),
-      });
-      return NextResponse.json(
-        {
-          error: error.message,
-          path: error.path,
-          status: error.status,
-          upstreamUrl: error.url,
-        },
-        { status: error.status },
-      );
+    // GET /api/statbotics/team/{teamNumber}
+    if (segments[0] === "team" && segments.length === 2) {
+      const team = parseTeamNumber(segments[1]);
+      if (!team) {
+        return emptyEpaJson({ error: "Invalid team number", path: statboticsPath });
+      }
+
+      const overall = await getTeam(team);
+      if (!overall) {
+        console.warn("[Statbotics proxy] team lookup empty/failed", { team });
+        return emptyEpaJson({ team, _fallback: "none" });
+      }
+
+      return NextResponse.json(teamPayloadFromOverall(overall), { status: 200 });
     }
 
-    console.error("[Statbotics proxy] unexpected error", requestedUrl, error);
-    return NextResponse.json(
-      { error: "Unexpected Statbotics proxy error", requestedUrl },
-      { status: 500 },
-    );
+    // GET /api/statbotics/team_event/{team}/{eventKey}
+    if (segments[0] === "team_event" && segments.length === 3) {
+      const team = parseTeamNumber(segments[1]);
+      const eventKey = segments[2];
+      if (!team || !eventKey) {
+        return emptyEpaJson({ error: "Invalid team_event path" });
+      }
+
+      const year = Number.parseInt(eventKey.slice(0, 4), 10);
+      const payload = await resolveTeamMetrics({
+        team,
+        eventKey,
+        year: Number.isFinite(year) ? year : undefined,
+      });
+      return NextResponse.json(payload, { status: 200 });
+    }
+
+    // GET /api/statbotics/team_year/{team}/{year}
+    if (segments[0] === "team_year" && segments.length === 3) {
+      const team = parseTeamNumber(segments[1]);
+      const year = Number.parseInt(segments[2] ?? "", 10);
+      if (!team || !Number.isFinite(year)) {
+        return emptyEpaJson({ error: "Invalid team_year path" });
+      }
+
+      const payload = await resolveTeamMetrics({ team, year });
+      return NextResponse.json(payload, { status: 200 });
+    }
+
+    // GET /api/statbotics/team_events?team=&event=&year=
+    if (segments[0] === "team_events" && segments.length === 1) {
+      const team = parseTeamNumber(String(params.team ?? ""));
+      const eventKey =
+        typeof params.event === "string" && params.event ? params.event : undefined;
+      const yearParam = params.year ? Number(params.year) : undefined;
+      const year =
+        yearParam && Number.isFinite(yearParam)
+          ? yearParam
+          : eventKey
+            ? Number.parseInt(eventKey.slice(0, 4), 10)
+            : undefined;
+
+      if (team && (eventKey || year)) {
+        const payload = await resolveTeamMetrics({
+          team,
+          eventKey,
+          year: Number.isFinite(year) ? year : undefined,
+        });
+        // Preserve array shape expected by list consumers, with metrics embedded.
+        return NextResponse.json([payload], { status: 200 });
+      }
+
+      if (team) {
+        const overall = await getTeam(team);
+        if (overall) {
+          return NextResponse.json([teamPayloadFromOverall(overall)], {
+            status: 200,
+          });
+        }
+        return NextResponse.json(
+          [{ ...EMPTY_EPA_RESPONSE, team, _fallback: "none" }],
+          { status: 200 },
+        );
+      }
+
+      const rows = await statboticsFetchOrNull<unknown[]>("/team_events", params);
+      return NextResponse.json(rows ?? [], { status: 200 });
+    }
+
+    // Generic passthrough for other Statbotics paths — never 500 on upstream miss.
+    try {
+      const data = await proxyStatboticsRequest(statboticsPath, params);
+      if (isEmptyPayload(data)) {
+        console.warn("[Statbotics proxy] empty upstream payload", { requestedUrl });
+        if (statboticsPath.includes("team")) {
+          return emptyEpaJson({ path: statboticsPath, _fallback: "none" });
+        }
+        return NextResponse.json(Array.isArray(data) ? [] : {}, { status: 200 });
+      }
+      return NextResponse.json(data, { status: 200 });
+    } catch (error) {
+      console.warn("[Statbotics proxy] upstream failure degraded to empty 200", {
+        requestedUrl,
+        error: error instanceof Error ? error.message.slice(0, 300) : error,
+      });
+      if (statboticsPath.includes("team")) {
+        return emptyEpaJson({
+          path: statboticsPath,
+          _fallback: "none",
+          upstream_error: true,
+        });
+      }
+      return NextResponse.json([], { status: 200 });
+    }
+  } catch (error) {
+    // Absolute last resort: never crash the route with a 500 for Statbotics issues.
+    console.error("[Statbotics proxy] caught unexpected error; returning empty 200", {
+      requestedUrl,
+      error,
+    });
+    return emptyEpaJson({
+      path: statboticsPath,
+      _fallback: "none",
+      upstream_error: true,
+    });
   }
 }

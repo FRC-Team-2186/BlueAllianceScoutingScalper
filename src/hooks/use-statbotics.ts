@@ -13,7 +13,17 @@ export function useStatboticsTeam(teamNumber = PUBLIC_CONFIG.defaultTeam) {
     queryKey: ["statbotics-team", teamNumber],
     queryFn: async () => {
       const data = await fetchStatboticsTeam(teamNumber);
-      return Object.keys(data).length === 0 ? null : data;
+      if (!data || typeof data !== "object") return null;
+      const record = data as Record<string, unknown>;
+      if (
+        record.epa == null &&
+        record.win_rate == null &&
+        record.norm_epa == null &&
+        record.record == null
+      ) {
+        return null;
+      }
+      return data as typeof data;
     },
   });
 }

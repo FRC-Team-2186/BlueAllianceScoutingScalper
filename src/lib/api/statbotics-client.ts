@@ -7,6 +7,7 @@ import type {
 } from "@/lib/types/statbotics";
 
 const STATBOTICS_BASE_URL = "https://api.statbotics.io/v3";
+const STATBOTICS_USER_AGENT = "FRC-Scouting-App/1.0";
 
 export class StatboticsApiError extends Error {
   constructor(
@@ -20,7 +21,12 @@ export class StatboticsApiError extends Error {
   }
 }
 
-type QueryParams = Record<string, string | number | boolean | undefined>;
+export type QueryParams = Record<string, string | number | boolean | undefined>;
+
+export const EMPTY_EPA_RESPONSE = {
+  epa: null,
+  win_rate: null,
+} as const;
 
 function buildQuery(params?: QueryParams): string {
   if (!params) return "";
@@ -34,24 +40,42 @@ function buildQuery(params?: QueryParams): string {
   return query ? `?${query}` : "";
 }
 
-function isEmptyPayload(value: unknown): boolean {
+export function isEmptyPayload(value: unknown): boolean {
   if (value == null) return true;
   if (Array.isArray(value)) return value.length === 0;
   if (typeof value === "object") return Object.keys(value as object).length === 0;
   return false;
 }
 
-async function statboticsFetch<T>(
+/**
+ * Low-level Statbotics fetch. Throws StatboticsApiError on non-OK responses.
+ * Callers should catch and degrade gracefully for missing 2026 data.
+ */
+export async function statboticsFetch<T>(
   path: string,
   params?: QueryParams,
 ): Promise<T> {
   const url = `${STATBOTICS_BASE_URL}${path.startsWith("/") ? path : `/${path}`}${buildQuery(params)}`;
   console.log("[Statbotics] GET", url);
 
-  const response = await fetch(url, {
-    headers: { Accept: "application/json" },
-    next: { revalidate: 300 },
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": STATBOTICS_USER_AGENT,
+      },
+      next: { revalidate: 300 },
+    });
+  } catch (error) {
+    console.error("[Statbotics] network error", { url, error });
+    throw new StatboticsApiError(
+      error instanceof Error ? error.message : "Network error contacting Statbotics",
+      502,
+      path,
+      url,
+    );
+  }
 
   console.log("[Statbotics] response", {
     url,
@@ -81,11 +105,27 @@ async function statboticsFetch<T>(
   return data;
 }
 
+/** Safe fetch that returns null on any upstream failure or empty body. */
+export async function statboticsFetchOrNull<T>(
+  path: string,
+  params?: QueryParams,
+): Promise<T | null> {
+  try {
+    const data = await statboticsFetch<T>(path, params);
+    return isEmptyPayload(data) ? null : data;
+  } catch (error) {
+    console.warn("[Statbotics] safe fetch failed", {
+      path,
+      params,
+      status: error instanceof StatboticsApiError ? error.status : undefined,
+      message: error instanceof Error ? error.message.slice(0, 200) : error,
+    });
+    return null;
+  }
+}
+
 export async function getTeam(teamNumber: number): Promise<StatboticsTeam | null> {
-  const data = await statboticsFetch<StatboticsTeam | Record<string, never>>(
-    `/team/${teamNumber}`,
-  );
-  return isEmptyPayload(data) ? null : (data as StatboticsTeam);
+  return statboticsFetchOrNull<StatboticsTeam>(`/team/${teamNumber}`);
 }
 
 export async function getTeamEvents(params: {
@@ -96,7 +136,11 @@ export async function getTeamEvents(params: {
   metric?: string;
   ascending?: boolean;
 }): Promise<StatboticsTeamEvent[]> {
-  return statboticsFetch<StatboticsTeamEvent[]>("/team_events", params);
+  const data = await statboticsFetchOrNull<StatboticsTeamEvent[]>(
+    "/team_events",
+    params,
+  );
+  return data ?? [];
 }
 
 /** Prefer path form: `/v3/team_event/{team}/{event_key}` */
@@ -104,38 +148,17 @@ export async function getTeamEvent(
   teamNumber: number,
   eventKey: string,
 ): Promise<StatboticsTeamEvent | null> {
-  try {
-    const data = await statboticsFetch<StatboticsTeamEvent | Record<string, never>>(
-      `/team_event/${teamNumber}/${eventKey}`,
-    );
-    if (!isEmptyPayload(data)) {
-      return data as StatboticsTeamEvent;
-    }
-  } catch (error) {
-    if (!(error instanceof StatboticsApiError) || (error.status !== 404 && error.status !== 204)) {
-      console.warn(
-        `[Statbotics] team_event path failed for ${teamNumber}/${eventKey}; trying query fallback`,
-        error instanceof StatboticsApiError
-          ? { status: error.status, url: error.url }
-          : error,
-      );
-    }
-  }
+  const direct = await statboticsFetchOrNull<StatboticsTeamEvent>(
+    `/team_event/${teamNumber}/${eventKey}`,
+  );
+  if (direct) return direct;
 
-  try {
-    const rows = await getTeamEvents({
-      team: teamNumber,
-      event: eventKey,
-      limit: 1,
-    });
-    return rows[0] ?? null;
-  } catch (error) {
-    console.error(
-      `[Statbotics] team_events query fallback failed for ${teamNumber}/${eventKey}`,
-      error,
-    );
-    return null;
-  }
+  const rows = await getTeamEvents({
+    team: teamNumber,
+    event: eventKey,
+    limit: 1,
+  });
+  return rows[0] ?? null;
 }
 
 /** Prefer path form: `/v3/team_year/{team}/{year}` */
@@ -143,53 +166,33 @@ export async function getTeamYear(
   teamNumber: number,
   year: number,
 ): Promise<StatboticsTeamYear | null> {
-  try {
-    const data = await statboticsFetch<StatboticsTeamYear | Record<string, never>>(
-      `/team_year/${teamNumber}/${year}`,
-    );
-    if (!isEmptyPayload(data)) {
-      return data as StatboticsTeamYear;
-    }
-  } catch (error) {
-    if (!(error instanceof StatboticsApiError) || (error.status !== 404 && error.status !== 204)) {
-      console.warn(
-        `[Statbotics] team_year path failed for ${teamNumber}/${year}; trying query fallback`,
-        error instanceof StatboticsApiError
-          ? { status: error.status, url: error.url }
-          : error,
-      );
-    }
-  }
+  const direct = await statboticsFetchOrNull<StatboticsTeamYear>(
+    `/team_year/${teamNumber}/${year}`,
+  );
+  if (direct) return direct;
 
-  try {
-    const rows = await statboticsFetch<StatboticsTeamYear[]>("/team_years", {
-      team: teamNumber,
-      year,
-      limit: 1,
-    });
-    return rows[0] ?? null;
-  } catch (error) {
-    console.error(
-      `[Statbotics] team_years query fallback failed for ${teamNumber}/${year}`,
-      error,
-    );
-    return null;
-  }
+  const rows = await statboticsFetchOrNull<StatboticsTeamYear[]>("/team_years", {
+    team: teamNumber,
+    year,
+    limit: 1,
+  });
+  return rows?.[0] ?? null;
 }
 
 export async function getEvent(eventKey: string): Promise<StatboticsEvent | null> {
-  const data = await statboticsFetch<StatboticsEvent | Record<string, never>>(
-    `/event/${eventKey}`,
-  );
-  return isEmptyPayload(data) ? null : (data as StatboticsEvent);
+  return statboticsFetchOrNull<StatboticsEvent>(`/event/${eventKey}`);
 }
 
 export async function getEvents(year: number): Promise<StatboticsEvent[]> {
-  return statboticsFetch<StatboticsEvent[]>("/events", { year });
+  const data = await statboticsFetchOrNull<StatboticsEvent[]>("/events", { year });
+  return data ?? [];
 }
 
 export async function getEventMatches(eventKey: string): Promise<StatboticsMatch[]> {
-  return statboticsFetch<StatboticsMatch[]>("/matches", { event: eventKey });
+  const data = await statboticsFetchOrNull<StatboticsMatch[]>("/matches", {
+    event: eventKey,
+  });
+  return data ?? [];
 }
 
 export async function proxyStatboticsRequest(
@@ -197,4 +200,15 @@ export async function proxyStatboticsRequest(
   params?: QueryParams,
 ): Promise<unknown> {
   return statboticsFetch<unknown>(path, params);
+}
+
+export function teamPayloadFromOverall(
+  team: StatboticsTeam,
+): Record<string, unknown> {
+  return {
+    ...team,
+    epa: team.norm_epa?.current ?? team.norm_epa?.mean ?? null,
+    win_rate: team.record?.winrate ?? null,
+    _fallback: "team",
+  };
 }

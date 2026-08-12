@@ -66,25 +66,48 @@ function isEmptyPayload(value: unknown): boolean {
   return false;
 }
 
-function extractEpa(source: {
+function extractMetrics(source: {
+  name?: string;
   norm_epa?: { current?: number; mean?: number };
-  epa?: { mean?: number; auto?: number; teleop?: number; endgame?: number };
+  epa?:
+    | number
+    | null
+    | { mean?: number; auto?: number; teleop?: number; endgame?: number };
+  win_rate?: number | null;
+  record?: { winrate?: number };
+  _fallback?: string;
 }): {
   epa?: number;
   auto?: number;
   teleop?: number;
   endgame?: number;
+  winrate?: number;
+  fallback?: string;
 } {
+  const nested =
+    source.epa && typeof source.epa === "object" ? source.epa : undefined;
+  const flatEpa = typeof source.epa === "number" ? source.epa : undefined;
   const epa =
-    source.norm_epa?.current ??
-    source.norm_epa?.mean ??
-    source.epa?.mean;
+    source.norm_epa?.current ?? source.norm_epa?.mean ?? flatEpa ?? nested?.mean;
+
   return {
     epa: epa != null && Number.isFinite(epa) ? epa : undefined,
-    auto: source.epa?.auto,
-    teleop: source.epa?.teleop,
-    endgame: source.epa?.endgame,
+    auto: nested?.auto,
+    teleop: nested?.teleop,
+    endgame: nested?.endgame,
+    winrate:
+      source.win_rate ??
+      source.record?.winrate ??
+      undefined,
+    fallback: source._fallback,
   };
+}
+
+function hasUsableMetrics(value: unknown): boolean {
+  if (isEmptyPayload(value)) return false;
+  if (typeof value !== "object" || value == null) return false;
+  const metrics = extractMetrics(value as Parameters<typeof extractMetrics>[0]);
+  return metrics.epa != null || metrics.winrate != null;
 }
 
 export function fetchStatboticsTeam(teamNumber: number) {
@@ -173,39 +196,43 @@ export async function fetchStatboticsComparisonMetrics(params: {
 
   console.log("[Compare/Statbotics] cascade start", { team, eventKey, year });
 
-  // 1) Event-specific
+  // 1) Event-specific (proxy already falls back to /team/{n} server-side)
   try {
     const eventData = await fetchStatboticsTeamEvent(team, eventKey);
-    if (!isEmptyPayload(eventData)) {
-      const row = eventData as StatboticsTeamEvent;
-      const metrics = extractEpa(row);
-      if (metrics.epa != null) {
-        console.log("[Compare/Statbotics] using team_event", {
-          team,
-          eventKey,
-          epa: metrics.epa,
-        });
-        return {
-          ...base,
-          nickname: row.name,
-          epa: metrics.epa,
-          winrate: row.record?.winrate,
-          auto: metrics.auto,
-          teleop: metrics.teleop,
-          endgame: metrics.endgame,
-          source: "event",
-        };
-      }
-      console.warn(
-        "[Compare/Statbotics] team_event returned without EPA; falling back to team_year",
-        { team, eventKey, row },
-      );
-    } else {
-      console.warn(
-        "[Compare/Statbotics] team_event empty/null; falling back to team_year",
-        { team, eventKey },
-      );
+    if (hasUsableMetrics(eventData)) {
+      const row = eventData as StatboticsTeamEvent & {
+        name?: string;
+        win_rate?: number | null;
+        _fallback?: string;
+      };
+      const metrics = extractMetrics(row);
+      const source =
+        row._fallback === "team"
+          ? "team-overall"
+          : row._fallback === "team-year"
+            ? "team-year"
+            : "event";
+      console.log("[Compare/Statbotics] using team_event response", {
+        team,
+        eventKey,
+        epa: metrics.epa,
+        source,
+      });
+      return {
+        ...base,
+        nickname: row.name,
+        epa: metrics.epa,
+        winrate: metrics.winrate,
+        auto: metrics.auto,
+        teleop: metrics.teleop,
+        endgame: metrics.endgame,
+        source,
+      };
     }
+    console.warn(
+      "[Compare/Statbotics] team_event returned without usable EPA; falling back to team_year",
+      { team, eventKey, eventData },
+    );
   } catch (error) {
     const status = error instanceof BrowserApiError ? error.status : undefined;
     console.warn("[Compare/Statbotics] team_event failed; falling back to team_year", {
@@ -220,36 +247,35 @@ export async function fetchStatboticsComparisonMetrics(params: {
   // 2) Season averages
   try {
     const yearData = await fetchStatboticsTeamYear(team, year);
-    if (!isEmptyPayload(yearData)) {
-      const row = yearData as StatboticsTeamYear;
-      const metrics = extractEpa(row);
-      if (metrics.epa != null) {
-        console.log("[Compare/Statbotics] using team_year season averages", {
-          team,
-          year,
-          epa: metrics.epa,
-        });
-        return {
-          ...base,
-          nickname: row.name,
-          epa: metrics.epa,
-          winrate: row.record?.winrate,
-          auto: metrics.auto,
-          teleop: metrics.teleop,
-          endgame: metrics.endgame,
-          source: "team-year",
-        };
-      }
-      console.warn(
-        "[Compare/Statbotics] team_year returned without EPA; falling back to overall team",
-        { team, year, row },
-      );
-    } else {
-      console.warn(
-        "[Compare/Statbotics] team_year empty/null; falling back to overall team",
-        { team, year },
-      );
+    if (hasUsableMetrics(yearData)) {
+      const row = yearData as StatboticsTeamYear & {
+        win_rate?: number | null;
+        _fallback?: string;
+      };
+      const metrics = extractMetrics(row);
+      const source =
+        row._fallback === "team" ? "team-overall" : "team-year";
+      console.log("[Compare/Statbotics] using team_year season averages", {
+        team,
+        year,
+        epa: metrics.epa,
+        source,
+      });
+      return {
+        ...base,
+        nickname: row.name,
+        epa: metrics.epa,
+        winrate: metrics.winrate,
+        auto: metrics.auto,
+        teleop: metrics.teleop,
+        endgame: metrics.endgame,
+        source,
+      };
     }
+    console.warn(
+      "[Compare/Statbotics] team_year returned without usable EPA; falling back to overall team",
+      { team, year, yearData },
+    );
   } catch (error) {
     const status = error instanceof BrowserApiError ? error.status : undefined;
     console.warn("[Compare/Statbotics] team_year failed; falling back to overall team", {
@@ -264,13 +290,16 @@ export async function fetchStatboticsComparisonMetrics(params: {
   // 3) Overall team
   try {
     const teamData = await fetchStatboticsTeam(team);
-    if (isEmptyPayload(teamData)) {
-      console.warn("[Compare/Statbotics] overall team empty", { team });
+    if (!hasUsableMetrics(teamData)) {
+      console.warn("[Compare/Statbotics] overall team empty", { team, teamData });
       return base;
     }
 
-    const overall = teamData as StatboticsTeam;
-    const metrics = extractEpa(overall);
+    const overall = teamData as StatboticsTeam & {
+      name?: string;
+      win_rate?: number | null;
+    };
+    const metrics = extractMetrics(overall);
     console.log("[Compare/Statbotics] using overall team", {
       team,
       epa: metrics.epa,
@@ -279,7 +308,7 @@ export async function fetchStatboticsComparisonMetrics(params: {
       ...base,
       nickname: overall.name,
       epa: metrics.epa,
-      winrate: overall.record?.winrate,
+      winrate: metrics.winrate,
       auto: metrics.auto,
       teleop: metrics.teleop,
       endgame: metrics.endgame,
