@@ -1,0 +1,31 @@
+{
+  "matchKey": "2026cmp_qm1",
+  "eventKey": "2026cmp",
+  "youtubeVideoId": "example_video_id",
+  "source": "mock",
+  "analyzedAt": "2026-01-01T00:00:00.000Z",
+  "model": "mock-v1",
+  "actions": [
+    {
+      "timestampSec": 8,
+      "phase": "auto",
+      "teamKey": "frc2186",
+      "action": "Example autonomous score",
+      "points": 6,
+      "confidence": 0.5
+    }
+  ],
+  "summary": {
+    "autoPoints": { "frc2186": 6 },
+    "teleopCycles": { "frc2186": 3 },
+    "endgamePoints": { "frc2186": 10 },
+    "defenseRating": { "frc2186": 0.6 }
+  },
+  "tbaVerification": {
+    "redScore": 42,
+    "blueScore": 38,
+    "aiRedTotal": 40,
+    "aiBlueTotal": 36,
+    "delta": 2
+  }
+}
