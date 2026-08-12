@@ -50,6 +50,19 @@ export interface StatboticsTeamEvent {
   };
 }
 
+/** Season-average metrics for a team in a given year (Statbotics `/team_year`). */
+export interface StatboticsTeamYear {
+  team: number;
+  year: number;
+  name?: string;
+  record?: StatboticsRecord;
+  epa?: StatboticsTeamEventEpa;
+  norm_epa?: StatboticsEpaSnapshot;
+  country?: string | null;
+  state?: string | null;
+  district?: string | null;
+}
+
 export interface StatboticsEvent {
   key: string;
   name: string;

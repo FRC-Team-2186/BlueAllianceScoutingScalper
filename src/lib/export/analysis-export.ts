@@ -56,7 +56,7 @@ export interface ComparisonRow {
   verifiedVideo: boolean;
   aiMatchCount: number;
   dataSource: "verified-video" | "statbotics" | "mixed";
-  epaSource?: "event" | "team-overall" | "none";
+  epaSource?: "event" | "team-year" | "team-overall" | "none";
 }
 
 export function exportComparisonCsv(rows: ComparisonRow[]): string {

@@ -317,7 +317,11 @@ function TeamComparisonMatrixInner({
                     {row.aiMatchCount > 0
                       ? ` · ${row.aiMatchCount} analyzed match${row.aiMatchCount === 1 ? "" : "es"}`
                       : ""}
-                    {row.epaSource === "team-overall" ? " · overall EPA fallback" : ""}
+                    {row.epaSource === "team-year"
+                      ? " · season EPA fallback"
+                      : row.epaSource === "team-overall"
+                        ? " · overall EPA fallback"
+                        : ""}
                   </div>
                 </TableCell>
                 <TableCell>

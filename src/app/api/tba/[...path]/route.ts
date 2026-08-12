@@ -21,20 +21,34 @@ export async function GET(request: NextRequest, context: RouteContext) {
   const { path } = await context.params;
   const tbaPath = `/${path.join("/")}`;
   const query = request.nextUrl.search;
+  const requestedUrl = `${tbaPath}${query}`;
+
+  console.log("[TBA proxy] request", { requestedUrl });
 
   try {
-    const data = await proxyTbaRequest(`${tbaPath}${query}`);
+    const data = await proxyTbaRequest(requestedUrl);
+    console.log("[TBA proxy] success", {
+      requestedUrl,
+      itemCount: Array.isArray(data) ? data.length : undefined,
+    });
     return NextResponse.json(data);
   } catch (error) {
     if (error instanceof TbaApiError) {
+      console.error("[TBA proxy] upstream error", {
+        requestedUrl,
+        status: error.status,
+        path: error.path,
+        message: error.message.slice(0, 300),
+      });
       return NextResponse.json(
-        { error: error.message, path: error.path },
+        { error: error.message, path: error.path, status: error.status },
         { status: error.status },
       );
     }
 
+    console.error("[TBA proxy] unexpected error", requestedUrl, error);
     return NextResponse.json(
-      { error: "Unexpected TBA proxy error" },
+      { error: "Unexpected TBA proxy error", requestedUrl },
       { status: 500 },
     );
   }

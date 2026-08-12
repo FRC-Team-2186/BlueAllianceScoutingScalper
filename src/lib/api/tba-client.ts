@@ -33,6 +33,8 @@ function getTbaApiKey(): string {
 
 async function tbaFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${TBA_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  console.log("[TBA] GET", url);
+
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -43,8 +45,19 @@ async function tbaFetch<T>(path: string, init?: RequestInit): Promise<T> {
     next: { revalidate: 300 },
   });
 
+  console.log("[TBA] response", {
+    url,
+    status: response.status,
+    statusText: response.statusText,
+  });
+
   if (!response.ok) {
     const body = await response.text();
+    console.error("[TBA] error", {
+      url,
+      status: response.status,
+      body: body.slice(0, 500),
+    });
     throw new TbaApiError(
       body || `TBA request failed with status ${response.status}`,
       response.status,
