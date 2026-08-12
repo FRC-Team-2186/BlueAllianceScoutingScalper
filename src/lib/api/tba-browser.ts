@@ -1,4 +1,5 @@
 import type { TbaEvent, TbaMatch, TbaTeam, TbaTeamEventStatus } from "@/lib/types/tba";
+import { filterOfficialEvents } from "@/lib/tba/official-events";
 
 export class TbaBrowserApiError extends Error {
   constructor(
@@ -55,8 +56,11 @@ export function fetchTbaTeam(teamKey: string) {
   return fetchJson<TbaTeam>(`/api/tba/team/${teamKey}`);
 }
 
-export function fetchTbaTeamEvents(teamKey: string, year: number) {
-  return fetchJson<TbaEvent[]>(`/api/tba/team/${teamKey}/events/${year}`);
+export async function fetchTbaTeamEvents(teamKey: string, year: number) {
+  const events = await fetchJson<TbaEvent[]>(
+    `/api/tba/team/${teamKey}/events/${year}`,
+  );
+  return filterOfficialEvents(events);
 }
 
 export function fetchTbaTeamEventMatches(teamKey: string, eventKey: string) {

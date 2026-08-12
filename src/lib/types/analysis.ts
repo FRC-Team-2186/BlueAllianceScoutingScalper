@@ -10,6 +10,13 @@ export const AnalysisActionSchema = z.object({
   notes: z.string().optional(),
 });
 
+export const RobotPhasePointsSchema = z.object({
+  auto: z.number(),
+  teleop: z.number(),
+  endgame: z.number(),
+  total: z.number(),
+});
+
 export const MatchAnalysisSchema = z.object({
   matchKey: z.string(),
   eventKey: z.string(),
@@ -23,6 +30,8 @@ export const MatchAnalysisSchema = z.object({
     teleopCycles: z.record(z.string(), z.number()).optional(),
     endgamePoints: z.record(z.string(), z.number()).optional(),
     defenseRating: z.record(z.string(), z.number()).optional(),
+    /** Per-robot solo point contributions (preferred display metrics). */
+    robotPoints: z.record(z.string(), RobotPhasePointsSchema).optional(),
   }),
   tbaVerification: z
     .object({
@@ -37,6 +46,7 @@ export const MatchAnalysisSchema = z.object({
 
 export type AnalysisAction = z.infer<typeof AnalysisActionSchema>;
 export type MatchAnalysis = z.infer<typeof MatchAnalysisSchema>;
+export type RobotPhasePointsStored = z.infer<typeof RobotPhasePointsSchema>;
 
 export interface CacheIndexEntry {
   matchKey: string;

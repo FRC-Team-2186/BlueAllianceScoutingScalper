@@ -1,6 +1,7 @@
+import { enrichAnalysisWithRobotPoints } from "@/lib/analysis/enrich-robot-points";
+import { extractYoutubeVideoId } from "@/lib/api/youtube";
 import type { MatchAnalysis } from "@/lib/types/analysis";
 import type { TbaMatch } from "@/lib/types/tba";
-import { extractYoutubeVideoId } from "@/lib/api/youtube";
 
 export function createMockAnalysis(
   match: TbaMatch,
@@ -10,7 +11,7 @@ export function createMockAnalysis(
   const redScore = match.alliances.red.score;
   const blueScore = match.alliances.blue.score;
 
-  return {
+  const base: MatchAnalysis = {
     matchKey: match.key,
     eventKey: match.event_key,
     youtubeVideoId,
@@ -49,6 +50,9 @@ export function createMockAnalysis(
       teleopCycles: { [teamKey]: 3 },
       endgamePoints: { [teamKey]: 10 },
       defenseRating: { [teamKey]: 0.6 },
+      robotPoints: {
+        [teamKey]: { auto: 6, teleop: 12, endgame: 10, total: 28 },
+      },
     },
     tbaVerification: {
       redScore,
@@ -58,4 +62,6 @@ export function createMockAnalysis(
       delta: Math.abs(redScore - blueScore) > 0 ? 2 : 0,
     },
   };
+
+  return enrichAnalysisWithRobotPoints(base, match);
 }

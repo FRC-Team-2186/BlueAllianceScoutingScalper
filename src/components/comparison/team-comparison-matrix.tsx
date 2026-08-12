@@ -31,6 +31,7 @@ import {
   exportComparisonJson,
   type ComparisonRow,
 } from "@/lib/export/analysis-export";
+import { fetchSoloPoints } from "@/hooks/use-solo-points";
 import { fetchStatboticsComparisonMetrics } from "@/lib/api/statbotics-browser";
 import { PUBLIC_CONFIG } from "@/lib/config/public";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -43,6 +44,10 @@ type SortMetric =
   | "endgamePoints"
   | "defenseRating"
   | "epa"
+  | "soloAuto"
+  | "soloTeleop"
+  | "soloEndgame"
+  | "soloTotal"
   | "aiAutoScore"
   | "aiTeleopCycles"
   | "aiEndgamePoints"
@@ -97,6 +102,7 @@ function TeamComparisonMatrixInner({
   const [sortMetric, setSortMetric] = useState<SortMetric>("weightedScore");
   const [teams, setTeams] = useState(initialTeams);
   const [showAiColumns, setShowAiColumns] = useState(true);
+  const [showSoloColumns, setShowSoloColumns] = useState(true);
 
   const aiSummaryQuery = useEventAiSummary(eventKey);
 
@@ -106,6 +112,15 @@ function TeamComparisonMatrixInner({
       queryFn: () =>
         fetchStatboticsComparisonMetrics({ team, eventKey, year }),
       enabled: Boolean(team && eventKey && year),
+      staleTime: 30_000,
+    })),
+  });
+
+  const soloQueries = useQueries({
+    queries: teams.map((team) => ({
+      queryKey: ["comparison-solo-points", team, eventKey],
+      queryFn: () => fetchSoloPoints(team, eventKey),
+      enabled: Boolean(team && eventKey),
       staleTime: 30_000,
     })),
   });
@@ -136,10 +151,14 @@ function TeamComparisonMatrixInner({
       const teamKey = `frc${team}`;
       const stats = statboticsQueries[index]?.data;
       const ai = aiByTeam.get(teamKey);
+      const solo = soloQueries[index]?.data?.averages;
       const epa = stats?.epa;
-      const autoPoints = ai?.aiAutoScore ?? stats?.auto ?? 0;
-      const teleopCycles = ai?.aiTeleopCycles ?? stats?.teleop ?? 0;
-      const endgamePoints = ai?.aiEndgamePoints ?? stats?.endgame ?? 0;
+      const soloAuto = solo?.auto ?? ai?.aiAutoScore;
+      const soloTeleop = solo?.teleop ?? ai?.aiTeleopCycles;
+      const soloEndgame = solo?.endgame ?? ai?.aiEndgamePoints;
+      const autoPoints = soloAuto ?? stats?.auto ?? 0;
+      const teleopCycles = soloTeleop ?? stats?.teleop ?? 0;
+      const endgamePoints = soloEndgame ?? stats?.endgame ?? 0;
       const defenseRating = 0.5;
       const verifiedVideo = Boolean(ai?.verifiedVideo);
 
@@ -154,6 +173,16 @@ function TeamComparisonMatrixInner({
         endgamePoints,
         defenseRating,
         weightedScore: 0,
+        soloAuto,
+        soloTeleop,
+        soloEndgame,
+        soloTotal: solo?.total ?? (
+          soloAuto != null || soloTeleop != null || soloEndgame != null
+            ? (soloAuto ?? 0) + (soloTeleop ?? 0) + (soloEndgame ?? 0)
+            : undefined
+        ),
+        soloMatchCount: solo?.matchCount ?? soloQueries[index]?.data?.matchCount,
+        soloSource: solo?.source,
         aiAutoScore: ai?.aiAutoScore,
         aiTeleopCycles: ai?.aiTeleopCycles,
         aiEndgamePoints: ai?.aiEndgamePoints,
@@ -182,7 +211,7 @@ function TeamComparisonMatrixInner({
     });
     // year/eventKey intentionally included so the matrix rebuilds as soon as selectors change
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selector-driven refresh
-  }, [teams, year, eventKey, sortMetric, aiSummaryQuery.data, statboticsQueries]);
+  }, [teams, year, eventKey, sortMetric, aiSummaryQuery.data, statboticsQueries, soloQueries]);
 
   function applyFilters() {
     setTeams(parseTeamsInput(teamsInput));
@@ -206,6 +235,7 @@ function TeamComparisonMatrixInner({
 
   const isLoading =
     statboticsQueries.some((query) => query.isFetching) ||
+    soloQueries.some((query) => query.isFetching) ||
     aiSummaryQuery.isFetching;
 
   return (
@@ -248,6 +278,10 @@ function TeamComparisonMatrixInner({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="weightedScore">Weighted score</SelectItem>
+            <SelectItem value="soloAuto">Solo Auto</SelectItem>
+            <SelectItem value="soloTeleop">Solo Teleop</SelectItem>
+            <SelectItem value="soloEndgame">Solo Endgame</SelectItem>
+            <SelectItem value="soloTotal">Solo Total</SelectItem>
             <SelectItem value="aiAutoScore">AI Auto Score</SelectItem>
             <SelectItem value="aiTeleopCycles">AI Teleop Cycles</SelectItem>
             <SelectItem value="aiEndgamePoints">AI Endgame</SelectItem>
@@ -259,6 +293,14 @@ function TeamComparisonMatrixInner({
             <SelectItem value="epa">EPA</SelectItem>
           </SelectContent>
         </Select>
+
+        <Button
+          variant={showSoloColumns ? "default" : "outline"}
+          size="sm"
+          onClick={() => setShowSoloColumns((value) => !value)}
+        >
+          {showSoloColumns ? "Hide solo points" : "Show solo points"}
+        </Button>
 
         <Button
           variant={showAiColumns ? "default" : "outline"}
@@ -291,6 +333,14 @@ function TeamComparisonMatrixInner({
               <TableHead>Source</TableHead>
               <TableHead>EPA</TableHead>
               <TableHead>Win Rate</TableHead>
+              {showSoloColumns && (
+                <>
+                  <TableHead>Solo Auto</TableHead>
+                  <TableHead>Solo Teleop</TableHead>
+                  <TableHead>Solo Endgame</TableHead>
+                  <TableHead>Solo Total</TableHead>
+                </>
+              )}
               {showAiColumns && (
                 <>
                   <TableHead>AI Auto</TableHead>
@@ -314,8 +364,11 @@ function TeamComparisonMatrixInner({
                   <div className="font-medium">{row.team}</div>
                   <div className="text-xs text-muted-foreground">
                     {row.nickname ?? row.teamKey}
+                    {row.soloMatchCount
+                      ? ` · ${row.soloMatchCount} scored match${row.soloMatchCount === 1 ? "" : "es"}`
+                      : ""}
                     {row.aiMatchCount > 0
-                      ? ` · ${row.aiMatchCount} analyzed match${row.aiMatchCount === 1 ? "" : "es"}`
+                      ? ` · ${row.aiMatchCount} analyzed`
                       : ""}
                     {row.epaSource === "team-year"
                       ? " · season EPA fallback"
@@ -333,6 +386,16 @@ function TeamComparisonMatrixInner({
                     ? `${(row.winrate * 100).toFixed(1)}%`
                     : "—"}
                 </TableCell>
+                {showSoloColumns && (
+                  <>
+                    <TableCell>{row.soloAuto?.toFixed(1) ?? "—"}</TableCell>
+                    <TableCell>{row.soloTeleop?.toFixed(1) ?? "—"}</TableCell>
+                    <TableCell>{row.soloEndgame?.toFixed(1) ?? "—"}</TableCell>
+                    <TableCell className="font-medium">
+                      {row.soloTotal?.toFixed(1) ?? "—"}
+                    </TableCell>
+                  </>
+                )}
                 {showAiColumns && (
                   <>
                     <TableCell>

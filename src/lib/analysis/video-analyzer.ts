@@ -1,3 +1,4 @@
+import { enrichAnalysisWithRobotPoints } from "@/lib/analysis/enrich-robot-points";
 import { analyzeFramesWithGemini, GeminiVisionError } from "@/lib/analysis/gemini-vision";
 import { FrameSamplerError, sampleMatchFrames } from "@/lib/analysis/frame-sampler";
 import { RateLimitError } from "@/lib/analysis/rate-limiter";
@@ -41,7 +42,10 @@ export async function analyzeMatchVideo(
 
   const youtubeVideoId = extractYoutubeVideoId(match);
   if (!youtubeVideoId) {
-    const mock = createMockAnalysis(match, focusTeamKey);
+    const mock = enrichAnalysisWithRobotPoints(
+      createMockAnalysis(match, focusTeamKey),
+      match,
+    );
     await saveAnalysisCache(mock);
     return {
       status: "mock",
@@ -52,11 +56,14 @@ export async function analyzeMatchVideo(
 
   try {
     const frames = await sampleMatchFrames(youtubeVideoId);
-    const analysis = await analyzeFramesWithGemini(
+    const analysis = enrichAnalysisWithRobotPoints(
+      await analyzeFramesWithGemini(
+        match,
+        frames,
+        youtubeVideoId,
+        focusTeamKey,
+      ),
       match,
-      frames,
-      youtubeVideoId,
-      focusTeamKey,
     );
     const saved = await saveAnalysisCache(analysis);
     return { status: "complete", analysis: saved };
@@ -66,7 +73,10 @@ export async function analyzeMatchVideo(
       error instanceof GeminiVisionError ||
       error instanceof FrameSamplerError
     ) {
-      const mock = createMockAnalysis(match, focusTeamKey);
+      const mock = enrichAnalysisWithRobotPoints(
+        createMockAnalysis(match, focusTeamKey),
+        match,
+      );
       mock.actions[0] = {
         ...mock.actions[0],
         notes:

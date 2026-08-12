@@ -24,6 +24,17 @@ const GeminiResponseSchema = z.object({
     teleopCycles: z.record(z.string(), z.number()).optional(),
     endgamePoints: z.record(z.string(), z.number()).optional(),
     defenseRating: z.record(z.string(), z.number()).optional(),
+    robotPoints: z
+      .record(
+        z.string(),
+        z.object({
+          auto: z.number(),
+          teleop: z.number(),
+          endgame: z.number(),
+          total: z.number(),
+        }),
+      )
+      .optional(),
   }),
   tbaVerification: z
     .object({

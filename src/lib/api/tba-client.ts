@@ -1,4 +1,5 @@
 import { sortMatchesChronologically } from "@/lib/api/match-sort";
+import { filterOfficialEvents } from "@/lib/tba/official-events";
 import type {
   TbaEvent,
   TbaMatch,
@@ -80,7 +81,8 @@ export async function getTeamEvents(
   teamKey: string,
   year: number,
 ): Promise<TbaEvent[]> {
-  return tbaFetch<TbaEvent[]>(`/team/${teamKey}/events/${year}`);
+  const events = await tbaFetch<TbaEvent[]>(`/team/${teamKey}/events/${year}`);
+  return filterOfficialEvents(events);
 }
 
 export async function getTeamEventMatches(
@@ -116,7 +118,8 @@ export async function getMatch(matchKey: string): Promise<TbaMatch> {
 }
 
 export async function getEventsByYear(year: number): Promise<TbaEvent[]> {
-  return tbaFetch<TbaEvent[]>(`/events/${year}`);
+  const events = await tbaFetch<TbaEvent[]>(`/events/${year}`);
+  return filterOfficialEvents(events);
 }
 
 export async function proxyTbaRequest(path: string): Promise<unknown> {

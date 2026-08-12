@@ -28,6 +28,7 @@ Sampled frames (in order):
 ${frameManifest}
 
 Analyze robot actions across Auto (0-15s), Teleop, and Endgame (last ~30s).
+Attribute points to INDIVIDUAL robots (not just alliance totals).
 Return ONLY valid JSON with this exact shape:
 {
   "actions": [
@@ -45,7 +46,10 @@ Return ONLY valid JSON with this exact shape:
     "autoPoints": { "frc####": number },
     "teleopCycles": { "frc####": number },
     "endgamePoints": { "frc####": number },
-    "defenseRating": { "frc####": number between 0 and 1 }
+    "defenseRating": { "frc####": number between 0 and 1 },
+    "robotPoints": {
+      "frc####": { "auto": number, "teleop": number, "endgame": number, "total": number }
+    }
   },
   "tbaVerification": {
     "redScore": ${match.alliances.red.score},
@@ -58,7 +62,10 @@ Return ONLY valid JSON with this exact shape:
 
 Rules:
 - Use team keys like frc2186 (lowercase frc prefix).
+- Include EVERY alliance robot in summary.autoPoints, teleopCycles, endgamePoints, and robotPoints.
+- robotPoints must be single-robot contributions (Auto leave/score, Teleop cycles as point estimate, Endgame climb/park).
 - Prefer actions visible in the provided frames; infer conservatively when uncertain.
-- aiRedTotal/aiBlueTotal should approximate summed robot contributions for each alliance.
+- Cross-check TBA per-robot fields (autoLineRobotN, endGameRobotN) when present.
+- aiRedTotal/aiBlueTotal should approximate summed individual robot contributions for each alliance.
 - delta is absolute difference between TBA alliance totals and AI-estimated totals.`;
 }

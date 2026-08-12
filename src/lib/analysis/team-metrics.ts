@@ -45,15 +45,18 @@ export function aggregateTeamAiMetrics(
     return null;
   }
 
-  const autoScores = relevant.map(
-    (analysis) => analysis.summary.autoPoints?.[teamKey] ?? 0,
-  );
-  const teleopCycles = relevant.map(
-    (analysis) => analysis.summary.teleopCycles?.[teamKey] ?? 0,
-  );
-  const endgamePoints = relevant.map(
-    (analysis) => analysis.summary.endgamePoints?.[teamKey] ?? 0,
-  );
+  const autoScores = relevant.map((analysis) => {
+    const robot = analysis.summary.robotPoints?.[teamKey];
+    return robot?.auto ?? analysis.summary.autoPoints?.[teamKey] ?? 0;
+  });
+  const teleopCycles = relevant.map((analysis) => {
+    const robot = analysis.summary.robotPoints?.[teamKey];
+    return robot?.teleop ?? analysis.summary.teleopCycles?.[teamKey] ?? 0;
+  });
+  const endgamePoints = relevant.map((analysis) => {
+    const robot = analysis.summary.robotPoints?.[teamKey];
+    return robot?.endgame ?? analysis.summary.endgamePoints?.[teamKey] ?? 0;
+  });
   const confidences = relevant.flatMap((analysis) =>
     analysis.actions
       .filter((action) => action.teamKey === teamKey)

@@ -48,6 +48,13 @@ export interface ComparisonRow {
   endgamePoints: number;
   defenseRating: number;
   weightedScore: number;
+  /** Averaged single-robot TBA/AI point contributions */
+  soloAuto?: number;
+  soloTeleop?: number;
+  soloEndgame?: number;
+  soloTotal?: number;
+  soloMatchCount?: number;
+  soloSource?: string;
   aiAutoScore?: number;
   aiTeleopCycles?: number;
   aiEndgamePoints?: number;
@@ -77,20 +84,21 @@ export function computeWeightedScore(row: {
   aiTeleopCycles?: number;
   aiEndgamePoints?: number;
   visionConfidence?: number;
+  soloAuto?: number;
+  soloTeleop?: number;
+  soloEndgame?: number;
 }): number {
   const epaComponent = (row.epa ?? 1500) / 100;
-  const aiBoost =
-    (row.aiAutoScore ?? 0) * 0.8 +
-    (row.aiTeleopCycles ?? 0) * 1.2 +
-    (row.aiEndgamePoints ?? 0) * 0.9 +
-    (row.visionConfidence ?? 0) * 5;
+  const soloBoost =
+    (row.soloAuto ?? row.aiAutoScore ?? row.autoPoints) * 1.2 +
+    (row.soloTeleop ?? row.aiTeleopCycles ?? row.teleopCycles) * 1.5 +
+    (row.soloEndgame ?? row.aiEndgamePoints ?? row.endgamePoints) * 1.1;
+  const aiBoost = (row.visionConfidence ?? 0) * 5;
 
   return (
-    row.autoPoints * 1.5 +
-    row.teleopCycles * 2 +
-    row.endgamePoints * 1.2 +
     row.defenseRating * 10 +
     epaComponent +
+    soloBoost +
     aiBoost
   );
 }
