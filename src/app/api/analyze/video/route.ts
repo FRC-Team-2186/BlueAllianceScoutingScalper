@@ -10,6 +10,7 @@ import {
   markJobProcessing,
 } from "@/lib/cache/job-store";
 import { getCachedAnalysis } from "@/lib/cache/analysis-store";
+import { parseForceRefreshParams } from "@/lib/cache/force-refresh";
 import { getMatch } from "@/lib/api/tba-client";
 
 export const maxDuration = 300;
@@ -47,6 +48,47 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const { bypassCache } = parseForceRefreshParams(request.nextUrl.searchParams);
+  const teamKey = request.nextUrl.searchParams.get("teamKey") ?? undefined;
+
+  // ?force=true or ?cache=false on GET triggers a fresh Gemini run for this match.
+  if (bypassCache) {
+    let match;
+    try {
+      match = await getMatch(matchKey);
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to load match from TBA",
+        },
+        { status: 502 },
+      );
+    }
+
+    const job = await createAnalysisJob({
+      matchKey,
+      eventKey: match.event_key,
+      teamKey,
+    });
+
+    after(async () => {
+      await runAnalysisJob({ matchKey, teamKey, force: true });
+    });
+
+    return NextResponse.json(
+      {
+        status: "processing",
+        job,
+        force: true,
+        message: "Force refresh queued; Gemini will re-analyze this video.",
+      },
+      { status: 202 },
+    );
+  }
+
   const job = await getAnalysisJob(matchKey);
   if (!job) {
     return NextResponse.json({ error: "Job not found", matchKey }, { status: 404 });
@@ -54,7 +96,10 @@ export async function GET(request: NextRequest) {
 
   let analysis = null;
   if (job.status === "complete") {
-    analysis = await getCachedAnalysis(job.eventKey, job.matchKey);
+    analysis = await getCachedAnalysis(job.eventKey, job.matchKey, {
+      allowStaleSchema: false,
+      deleteStale: true,
+    });
   }
 
   return NextResponse.json({ job, analysis });
@@ -71,12 +116,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { matchKey, teamKey, force, async: runAsync } = parsed.data;
+  const queryForce = parseForceRefreshParams(request.nextUrl.searchParams);
+  const { matchKey, teamKey, async: runAsync } = parsed.data;
+  const force = Boolean(parsed.data.force || queryForce.bypassCache);
 
   if (!force) {
     try {
       const match = await getMatch(matchKey);
-      const cached = await getCachedAnalysis(match.event_key, matchKey);
+      const cached = await getCachedAnalysis(match.event_key, matchKey, {
+        allowStaleSchema: false,
+        deleteStale: true,
+      });
       if (cached) {
         return NextResponse.json({
           status: "cached",
@@ -122,7 +172,7 @@ export async function POST(request: NextRequest) {
     teamKey,
   });
 
-  if (runAsync) {
+  if (runAsync !== false) {
     after(async () => {
       await runAnalysisJob({ matchKey, teamKey, force });
     });
@@ -131,6 +181,7 @@ export async function POST(request: NextRequest) {
       {
         status: "processing",
         job,
+        force,
       },
       { status: 202 },
     );
@@ -138,11 +189,14 @@ export async function POST(request: NextRequest) {
 
   await runAnalysisJob({ matchKey, teamKey, force });
   const completedJob = await getAnalysisJob(matchKey);
-  const analysis = await getCachedAnalysis(match.event_key, matchKey);
+  const analysis = await getCachedAnalysis(match.event_key, matchKey, {
+    allowStaleSchema: false,
+  });
 
   return NextResponse.json({
     status: completedJob?.resultStatus ?? "complete",
     job: completedJob,
     analysis,
+    force,
   });
 }

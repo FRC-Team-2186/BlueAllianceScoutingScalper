@@ -28,7 +28,9 @@ export default function ComparePage() {
         <CardHeader>
           <CardTitle>Comparison Matrix</CardTitle>
           <CardDescription>
-            Combines Statbotics EPA with AI Auto/Teleop/Endgame metrics from cached video analyses.
+            Statbotics EPA plus Gemini video analysis. Use Force Refresh or
+            <code className="mx-1 rounded bg-muted px-1">?force=true</code>
+            to bypass stale caches and re-run the current schema.
             Use the year/event selectors to compare 2025 REEFSCAPE events while 2026 data is sparse.
           </CardDescription>
         </CardHeader>

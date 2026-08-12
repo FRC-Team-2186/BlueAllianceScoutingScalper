@@ -1,8 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Database, Eye, Loader2 } from "lucide-react";
-import { useQueries } from "@tanstack/react-query";
+import { Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { CheckCircle2, Database, Eye, Loader2, RefreshCw } from "lucide-react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +38,7 @@ import {
 } from "@/lib/export/analysis-export";
 import { fetchSoloPoints } from "@/hooks/use-solo-points";
 import { fetchStatboticsComparisonMetrics } from "@/lib/api/statbotics-browser";
+import { ensureCompareClientSchemaVersion } from "@/lib/cache/force-refresh";
 import { PUBLIC_CONFIG } from "@/lib/config/public";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -94,6 +97,17 @@ function DataSourceBadge({ row }: { row: ComparisonRow }) {
 function TeamComparisonMatrixInner({
   initialTeams = [2186, 254, 1678],
 }: TeamComparisonMatrixProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
+  const [isRefreshing, startRefreshTransition] = useTransition();
+
+  const forceFromUrl =
+    searchParams.get("force") === "true" ||
+    searchParams.get("force") === "1" ||
+    searchParams.get("cache") === "false";
+
   const { year, eventKey, setYear, setEventKey } = useScoutFilters({
     eventKey: PUBLIC_CONFIG.defaultEvent,
   });
@@ -102,25 +116,60 @@ function TeamComparisonMatrixInner({
   const [teams, setTeams] = useState(initialTeams);
   const [showAiColumns, setShowAiColumns] = useState(true);
   const [showSoloColumns, setShowSoloColumns] = useState(true);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const force = forceFromUrl;
 
-  const aiSummaryQuery = useEventAiSummary(eventKey);
+  useEffect(() => {
+    const result = ensureCompareClientSchemaVersion();
+    if (result.cleared) {
+      queryClient.clear();
+      toast.message("Cleared stale compare client cache (schema updated)");
+    }
+  }, [queryClient]);
+
+  // Changing year / event / teams must fully re-fetch the comparison array.
+  useEffect(() => {
+    void queryClient.invalidateQueries({ queryKey: ["event-ai-summary"] });
+    void queryClient.invalidateQueries({ queryKey: ["comparison-statbotics"] });
+    void queryClient.invalidateQueries({ queryKey: ["comparison-solo-points"] });
+  }, [year, eventKey, teams, queryClient]);
+
+  const aiSummaryQuery = useEventAiSummary(eventKey, { force });
 
   const statboticsQueries = useQueries({
     queries: teams.map((team) => ({
-      queryKey: ["comparison-statbotics", team, year, eventKey],
+      queryKey: [
+        "comparison-statbotics",
+        team,
+        year,
+        eventKey,
+        force ? "force" : "cache",
+        refreshNonce,
+      ],
       queryFn: () =>
-        fetchStatboticsComparisonMetrics({ team, eventKey, year }),
+        fetchStatboticsComparisonMetrics({
+          team,
+          eventKey,
+          year,
+          force,
+        }),
       enabled: Boolean(team && eventKey && year),
-      staleTime: 30_000,
+      staleTime: force ? 0 : 30_000,
     })),
   });
 
   const soloQueries = useQueries({
     queries: teams.map((team) => ({
-      queryKey: ["comparison-solo-points", team, eventKey],
-      queryFn: () => fetchSoloPoints(team, eventKey),
+      queryKey: [
+        "comparison-solo-points",
+        team,
+        eventKey,
+        force ? "force" : "cache",
+        refreshNonce,
+      ],
+      queryFn: () => fetchSoloPoints(team, eventKey, { force }),
       enabled: Boolean(team && eventKey),
-      staleTime: 30_000,
+      staleTime: force ? 0 : 30_000,
     })),
   });
 
@@ -217,12 +266,99 @@ function TeamComparisonMatrixInner({
       const right = metricOrZero(b[sortMetric as keyof ComparisonRow] as number);
       return right - left;
     });
-    // year/eventKey intentionally included so the matrix rebuilds as soon as selectors change
+    // year/eventKey/refreshNonce force a full matrix rebuild when filters or force-refresh change
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selector-driven refresh
-  }, [teams, year, eventKey, sortMetric, aiSummaryQuery.data, statboticsQueries, soloQueries]);
+  }, [
+    teams,
+    year,
+    eventKey,
+    sortMetric,
+    aiSummaryQuery.data,
+    statboticsQueries,
+    soloQueries,
+    refreshNonce,
+  ]);
 
   function applyFilters() {
     setTeams(parseTeamsInput(teamsInput));
+  }
+
+  function setForceInUrl(enabled: boolean) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (enabled) {
+      params.set("force", "true");
+      params.delete("cache");
+    } else {
+      params.delete("force");
+      params.delete("cache");
+    }
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }
+
+  async function handleForceRefresh() {
+    startRefreshTransition(() => {
+      void (async () => {
+        const toastId = toast.loading("Force refreshing compare data…");
+        try {
+          ensureCompareClientSchemaVersion();
+          setForceInUrl(true);
+
+          // Clear stale server analysis cache and re-queue Gemini for selected teams.
+          const invalidate = await fetch(
+            `/api/cache/analysis/${encodeURIComponent(eventKey)}?force=true&staleOnly=true`,
+            { method: "DELETE", cache: "no-store" },
+          );
+          if (!invalidate.ok) {
+            throw new Error("Failed to invalidate analysis cache");
+          }
+
+          const reanalyze = await fetch(
+            `/api/analyze/event?force=true`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              cache: "no-store",
+              body: JSON.stringify({
+                eventKey,
+                teams,
+                force: true,
+                staleOnly: true,
+                limit: Math.max(6, teams.length * 4),
+              }),
+            },
+          );
+
+          const reanalyzeBody = await reanalyze.json().catch(() => ({}));
+          if (!reanalyze.ok && reanalyze.status !== 202) {
+            throw new Error(
+              (reanalyzeBody as { error?: string }).error ??
+                "Failed to queue video re-analysis",
+            );
+          }
+
+          await queryClient.invalidateQueries({ queryKey: ["event-ai-summary"] });
+          await queryClient.invalidateQueries({
+            queryKey: ["comparison-statbotics"],
+          });
+          await queryClient.invalidateQueries({
+            queryKey: ["comparison-solo-points"],
+          });
+
+          setRefreshNonce((value) => value + 1);
+
+          toast.success(
+            (reanalyzeBody as { message?: string }).message ??
+              "Force refresh started",
+            { id: toastId },
+          );
+        } catch (error) {
+          toast.error(
+            error instanceof Error ? error.message : "Force refresh failed",
+            { id: toastId },
+          );
+        }
+      })();
+    });
   }
 
   function handleExportJson() {
@@ -242,6 +378,7 @@ function TeamComparisonMatrixInner({
   }
 
   const isLoading =
+    isRefreshing ||
     statboticsQueries.some((query) => query.isFetching) ||
     soloQueries.some((query) => query.isFetching) ||
     aiSummaryQuery.isFetching;
@@ -256,7 +393,7 @@ function TeamComparisonMatrixInner({
         onEventChange={setEventKey}
       />
 
-      <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
+      <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto]">
         <Input
           value={teamsInput}
           onChange={(event) => setTeamsInput(event.target.value)}
@@ -264,6 +401,18 @@ function TeamComparisonMatrixInner({
         />
         <Button onClick={applyFilters} variant="secondary">
           Apply teams
+        </Button>
+        <Button
+          onClick={() => void handleForceRefresh()}
+          variant="default"
+          disabled={isRefreshing}
+        >
+          {isRefreshing ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
+          Force Refresh
         </Button>
         <Button onClick={handleExportCsv} variant="outline">
           Export CSV
@@ -319,6 +468,10 @@ function TeamComparisonMatrixInner({
           {showAiColumns ? "Hide AI columns" : "Show AI columns"}
         </Button>
 
+        {force && (
+          <Badge variant="destructive">force refresh</Badge>
+        )}
+
         {isLoading && (
           <Badge variant="outline" className="gap-1">
             <Loader2 className="size-3 animate-spin" />
@@ -329,11 +482,14 @@ function TeamComparisonMatrixInner({
           {year} · {eventKey}
         </Badge>
         <Badge variant="secondary">
-          {aiSummaryQuery.data?.analysisCount ?? 0} cached videos
+          {aiSummaryQuery.data?.analysisCount ?? 0} schema-valid videos
         </Badge>
       </div>
 
-      <div className="overflow-x-auto" key={`${year}-${eventKey}-${teams.join(",")}`}>
+      <div
+        className="overflow-x-auto"
+        key={`${year}-${eventKey}-${teams.join(",")}-${refreshNonce}`}
+      >
         <Table>
           <TableHeader>
             <TableRow>
@@ -365,7 +521,7 @@ function TeamComparisonMatrixInner({
           <TableBody>
             {rows.map((row, index) => (
               <TableRow
-                key={`${year}-${eventKey}-${row.team}`}
+                key={`${year}-${eventKey}-${row.team}-${refreshNonce}`}
                 className={cn(row.verifiedVideo && "bg-emerald-500/5")}
               >
                 <TableCell>{index + 1}</TableCell>

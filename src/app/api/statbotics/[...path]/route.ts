@@ -8,6 +8,7 @@ import {
   teamPayloadFromOverall,
   type QueryParams,
 } from "@/lib/api/statbotics-client";
+import { parseForceRefreshParams } from "@/lib/cache/force-refresh";
 
 type RouteContext = {
   params: Promise<{ path: string[] }>;
@@ -38,20 +39,24 @@ async function resolveTeamMetrics(options: {
   team: number;
   eventKey?: string;
   year?: number;
+  bypassCache?: boolean;
 }): Promise<Record<string, unknown>> {
-  const { team, eventKey, year } = options;
+  const { team, eventKey, year, bypassCache } = options;
+  const fetchOpts = { bypassCache };
 
   if (eventKey) {
     const eventData =
       (await statboticsFetchOrNull<Record<string, unknown>>(
         `/team_event/${team}/${eventKey}`,
+        undefined,
+        fetchOpts,
       )) ??
       (
         await statboticsFetchOrNull<Record<string, unknown>[]>("/team_events", {
           team,
           event: eventKey,
           limit: 1,
-        })
+        }, fetchOpts)
       )?.[0];
 
     if (eventData && !isEmptyPayload(eventData)) {
@@ -79,13 +84,15 @@ async function resolveTeamMetrics(options: {
     const yearData =
       (await statboticsFetchOrNull<Record<string, unknown>>(
         `/team_year/${team}/${year}`,
+        undefined,
+        fetchOpts,
       )) ??
       (
         await statboticsFetchOrNull<Record<string, unknown>[]>("/team_years", {
           team,
           year,
           limit: 1,
-        })
+        }, fetchOpts)
       )?.[0];
 
     if (yearData && !isEmptyPayload(yearData)) {
@@ -104,7 +111,7 @@ async function resolveTeamMetrics(options: {
     }
   }
 
-  const overall = await getTeam(team);
+  const overall = await getTeam(team, fetchOpts);
   if (overall) {
     console.log("[Statbotics proxy] using overall team endpoint", { team });
     return teamPayloadFromOverall(overall);
@@ -128,15 +135,21 @@ export async function GET(request: NextRequest, context: RouteContext) {
   const { path } = await context.params;
   const segments = path;
   const statboticsPath = `/${segments.join("/")}`;
-  const params = Object.fromEntries(
+  const rawParams = Object.fromEntries(
     request.nextUrl.searchParams.entries(),
   ) as QueryParams;
+  const { bypassCache } = parseForceRefreshParams(request.nextUrl.searchParams);
+  const params = { ...rawParams };
+  delete params.force;
+  delete params.cache;
   const requestedUrl = `${statboticsPath}${request.nextUrl.search}`;
+  const fetchOpts = { bypassCache };
 
   console.log("[Statbotics proxy] request", {
     path: statboticsPath,
     query: params,
     requestedUrl,
+    bypassCache,
   });
 
   try {
@@ -147,13 +160,18 @@ export async function GET(request: NextRequest, context: RouteContext) {
         return emptyEpaJson({ error: "Invalid team number", path: statboticsPath });
       }
 
-      const overall = await getTeam(team);
+      const overall = await getTeam(team, fetchOpts);
       if (!overall) {
         console.warn("[Statbotics proxy] team lookup empty/failed", { team });
         return emptyEpaJson({ team, _fallback: "none" });
       }
 
-      return NextResponse.json(teamPayloadFromOverall(overall), { status: 200 });
+      return NextResponse.json(teamPayloadFromOverall(overall), {
+        status: 200,
+        headers: bypassCache
+          ? { "Cache-Control": "no-store" }
+          : undefined,
+      });
     }
 
     // GET /api/statbotics/team_event/{team}/{eventKey}
@@ -169,8 +187,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
         team,
         eventKey,
         year: Number.isFinite(year) ? year : undefined,
+        bypassCache,
       });
-      return NextResponse.json(payload, { status: 200 });
+      return NextResponse.json(payload, {
+        status: 200,
+        headers: bypassCache
+          ? { "Cache-Control": "no-store" }
+          : undefined,
+      });
     }
 
     // GET /api/statbotics/team_year/{team}/{year}
@@ -181,8 +205,13 @@ export async function GET(request: NextRequest, context: RouteContext) {
         return emptyEpaJson({ error: "Invalid team_year path" });
       }
 
-      const payload = await resolveTeamMetrics({ team, year });
-      return NextResponse.json(payload, { status: 200 });
+      const payload = await resolveTeamMetrics({ team, year, bypassCache });
+      return NextResponse.json(payload, {
+        status: 200,
+        headers: bypassCache
+          ? { "Cache-Control": "no-store" }
+          : undefined,
+      });
     }
 
     // GET /api/statbotics/team_events?team=&event=&year=
@@ -203,16 +232,25 @@ export async function GET(request: NextRequest, context: RouteContext) {
           team,
           eventKey,
           year: Number.isFinite(year) ? year : undefined,
+          bypassCache,
         });
         // Preserve array shape expected by list consumers, with metrics embedded.
-        return NextResponse.json([payload], { status: 200 });
+        return NextResponse.json([payload], {
+          status: 200,
+          headers: bypassCache
+            ? { "Cache-Control": "no-store" }
+            : undefined,
+        });
       }
 
       if (team) {
-        const overall = await getTeam(team);
+        const overall = await getTeam(team, fetchOpts);
         if (overall) {
           return NextResponse.json([teamPayloadFromOverall(overall)], {
             status: 200,
+            headers: bypassCache
+              ? { "Cache-Control": "no-store" }
+              : undefined,
           });
         }
         return NextResponse.json(
@@ -221,13 +259,21 @@ export async function GET(request: NextRequest, context: RouteContext) {
         );
       }
 
-      const rows = await statboticsFetchOrNull<unknown[]>("/team_events", params);
+      const rows = await statboticsFetchOrNull<unknown[]>(
+        "/team_events",
+        params,
+        fetchOpts,
+      );
       return NextResponse.json(rows ?? [], { status: 200 });
     }
 
     // Generic passthrough for other Statbotics paths — never 500 on upstream miss.
     try {
-      const data = await proxyStatboticsRequest(statboticsPath, params);
+      const data = await proxyStatboticsRequest(
+        statboticsPath,
+        params,
+        fetchOpts,
+      );
       if (isEmptyPayload(data)) {
         console.warn("[Statbotics proxy] empty upstream payload", { requestedUrl });
         if (statboticsPath.includes("team")) {
@@ -235,7 +281,12 @@ export async function GET(request: NextRequest, context: RouteContext) {
         }
         return NextResponse.json(Array.isArray(data) ? [] : {}, { status: 200 });
       }
-      return NextResponse.json(data, { status: 200 });
+      return NextResponse.json(data, {
+        status: 200,
+        headers: bypassCache
+          ? { "Cache-Control": "no-store" }
+          : undefined,
+      });
     } catch (error) {
       console.warn("[Statbotics proxy] upstream failure degraded to empty 200", {
         requestedUrl,

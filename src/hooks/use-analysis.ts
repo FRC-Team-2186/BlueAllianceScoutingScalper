@@ -63,12 +63,16 @@ export function useMatchAnalysis(eventKey: string, matchKey: string) {
   });
 }
 
-export function useEventAiSummary(eventKey: string) {
+export function useEventAiSummary(eventKey: string, options?: { force?: boolean }) {
+  const force = Boolean(options?.force);
   return useQuery({
-    queryKey: ["event-ai-summary", eventKey],
+    queryKey: ["event-ai-summary", eventKey, force ? "force" : "cache"],
     queryFn: async () => {
+      const search = new URLSearchParams({ include: "summary" });
+      if (force) search.set("force", "true");
       const response = await fetch(
-        `/api/cache/analysis/${eventKey}?include=summary`,
+        `/api/cache/analysis/${eventKey}?${search.toString()}`,
+        { cache: force ? "no-store" : "default" },
       );
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -86,6 +90,7 @@ export function useEventAiSummary(eventKey: string) {
       return response.json() as Promise<EventAiSummaryResponse>;
     },
     enabled: Boolean(eventKey),
+    staleTime: force ? 0 : 30_000,
   });
 }
 

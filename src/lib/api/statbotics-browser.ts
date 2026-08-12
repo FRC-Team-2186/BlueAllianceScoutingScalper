@@ -16,13 +16,29 @@ export class BrowserApiError extends Error {
   }
 }
 
-async function fetchJson<T>(url: string, label = "API"): Promise<T> {
-  console.log(`[${label}] request`, url);
+async function fetchJson<T>(
+  url: string,
+  label = "API",
+  options?: { force?: boolean; bypassCache?: boolean },
+): Promise<T> {
+  const finalUrl =
+    options?.force || options?.bypassCache
+      ? (() => {
+          const parsed = new URL(url, "http://localhost");
+          if (options.force) parsed.searchParams.set("force", "true");
+          else if (options.bypassCache) parsed.searchParams.set("cache", "false");
+          return `${parsed.pathname}${parsed.search}`;
+        })()
+      : url;
+
+  console.log(`[${label}] request`, finalUrl);
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(finalUrl, {
+      cache: options?.force || options?.bypassCache ? "no-store" : "default",
+    });
     console.log(`[${label}] response`, {
-      url,
+      url: finalUrl,
       status: response.status,
       statusText: response.statusText,
     });
@@ -33,12 +49,12 @@ async function fetchJson<T>(url: string, label = "API"): Promise<T> {
         (errorBody as { error?: string }).error ??
         `Request failed: ${response.status} ${response.statusText}`;
       console.error(`[${label}] error`, {
-        url,
+        url: finalUrl,
         status: response.status,
         statusText: response.statusText,
         body: errorBody,
       });
-      throw new BrowserApiError(message, response.status, url);
+      throw new BrowserApiError(message, response.status, finalUrl);
     }
 
     const data = (await response.json()) as T;
@@ -46,14 +62,17 @@ async function fetchJson<T>(url: string, label = "API"): Promise<T> {
       data == null ||
       (typeof data === "object" && Object.keys(data as object).length === 0);
     if (empty) {
-      console.warn(`[${label}] empty payload`, { url, status: response.status });
+      console.warn(`[${label}] empty payload`, {
+        url: finalUrl,
+        status: response.status,
+      });
     } else {
-      console.log(`[${label}] success`, { url, status: response.status });
+      console.log(`[${label}] success`, { url: finalUrl, status: response.status });
     }
     return data;
   } catch (error) {
     if (!(error instanceof BrowserApiError)) {
-      console.error(`[${label}] network/parse error`, { url, error });
+      console.error(`[${label}] network/parse error`, { url: finalUrl, error });
     }
     throw error;
   }
@@ -110,24 +129,38 @@ function hasUsableMetrics(value: unknown): boolean {
   return metrics.epa != null || metrics.winrate != null;
 }
 
-export function fetchStatboticsTeam(teamNumber: number) {
+export function fetchStatboticsTeam(
+  teamNumber: number,
+  options?: { force?: boolean },
+) {
   return fetchJson<StatboticsTeam | Record<string, never>>(
     `/api/statbotics/team/${teamNumber}`,
     "Statbotics",
+    options,
   );
 }
 
-export function fetchStatboticsTeamEvent(teamNumber: number, eventKey: string) {
+export function fetchStatboticsTeamEvent(
+  teamNumber: number,
+  eventKey: string,
+  options?: { force?: boolean },
+) {
   return fetchJson<StatboticsTeamEvent | Record<string, never>>(
     `/api/statbotics/team_event/${teamNumber}/${eventKey}`,
     "Statbotics",
+    options,
   );
 }
 
-export function fetchStatboticsTeamYear(teamNumber: number, year: number) {
+export function fetchStatboticsTeamYear(
+  teamNumber: number,
+  year: number,
+  options?: { force?: boolean },
+) {
   return fetchJson<StatboticsTeamYear | Record<string, never>>(
     `/api/statbotics/team_year/${teamNumber}/${year}`,
     "Statbotics",
+    options,
   );
 }
 
@@ -185,8 +218,10 @@ export async function fetchStatboticsComparisonMetrics(params: {
   team: number;
   eventKey: string;
   year: number;
+  force?: boolean;
 }): Promise<TeamComparisonStatboticsMetrics> {
-  const { team, eventKey, year } = params;
+  const { team, eventKey, year, force } = params;
+  const fetchOpts = force ? { force: true } : undefined;
   const base: TeamComparisonStatboticsMetrics = {
     team,
     eventKey,
@@ -194,11 +229,11 @@ export async function fetchStatboticsComparisonMetrics(params: {
     source: "none",
   };
 
-  console.log("[Compare/Statbotics] cascade start", { team, eventKey, year });
+  console.log("[Compare/Statbotics] cascade start", { team, eventKey, year, force });
 
   // 1) Event-specific (proxy already falls back to /team/{n} server-side)
   try {
-    const eventData = await fetchStatboticsTeamEvent(team, eventKey);
+    const eventData = await fetchStatboticsTeamEvent(team, eventKey, fetchOpts);
     if (hasUsableMetrics(eventData)) {
       const row = eventData as StatboticsTeamEvent & {
         name?: string;
@@ -246,7 +281,7 @@ export async function fetchStatboticsComparisonMetrics(params: {
 
   // 2) Season averages
   try {
-    const yearData = await fetchStatboticsTeamYear(team, year);
+    const yearData = await fetchStatboticsTeamYear(team, year, fetchOpts);
     if (hasUsableMetrics(yearData)) {
       const row = yearData as StatboticsTeamYear & {
         win_rate?: number | null;
@@ -289,7 +324,7 @@ export async function fetchStatboticsComparisonMetrics(params: {
 
   // 3) Overall team
   try {
-    const teamData = await fetchStatboticsTeam(team);
+    const teamData = await fetchStatboticsTeam(team, fetchOpts);
     if (!hasUsableMetrics(teamData)) {
       console.warn("[Compare/Statbotics] overall team empty", { team, teamData });
       return base;

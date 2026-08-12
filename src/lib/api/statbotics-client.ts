@@ -54,9 +54,17 @@ export function isEmptyPayload(value: unknown): boolean {
 export async function statboticsFetch<T>(
   path: string,
   params?: QueryParams,
+  options?: { bypassCache?: boolean },
 ): Promise<T> {
-  const url = `${STATBOTICS_BASE_URL}${path.startsWith("/") ? path : `/${path}`}${buildQuery(params)}`;
-  console.log("[Statbotics] GET", url);
+  const filteredParams = { ...params };
+  // Strip local cache-control flags so they are not forwarded upstream.
+  delete filteredParams.force;
+  delete filteredParams.cache;
+
+  const url = `${STATBOTICS_BASE_URL}${path.startsWith("/") ? path : `/${path}`}${buildQuery(filteredParams)}`;
+  console.log("[Statbotics] GET", url, {
+    bypassCache: Boolean(options?.bypassCache),
+  });
 
   let response: Response;
   try {
@@ -65,7 +73,9 @@ export async function statboticsFetch<T>(
         Accept: "application/json",
         "User-Agent": STATBOTICS_USER_AGENT,
       },
-      next: { revalidate: 300 },
+      ...(options?.bypassCache
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: 300 } }),
     });
   } catch (error) {
     console.error("[Statbotics] network error", { url, error });
@@ -109,9 +119,10 @@ export async function statboticsFetch<T>(
 export async function statboticsFetchOrNull<T>(
   path: string,
   params?: QueryParams,
+  options?: { bypassCache?: boolean },
 ): Promise<T | null> {
   try {
-    const data = await statboticsFetch<T>(path, params);
+    const data = await statboticsFetch<T>(path, params, options);
     return isEmptyPayload(data) ? null : data;
   } catch (error) {
     console.warn("[Statbotics] safe fetch failed", {
@@ -124,8 +135,15 @@ export async function statboticsFetchOrNull<T>(
   }
 }
 
-export async function getTeam(teamNumber: number): Promise<StatboticsTeam | null> {
-  return statboticsFetchOrNull<StatboticsTeam>(`/team/${teamNumber}`);
+export async function getTeam(
+  teamNumber: number,
+  options?: { bypassCache?: boolean },
+): Promise<StatboticsTeam | null> {
+  return statboticsFetchOrNull<StatboticsTeam>(
+    `/team/${teamNumber}`,
+    undefined,
+    options,
+  );
 }
 
 export async function getTeamEvents(params: {
@@ -198,8 +216,9 @@ export async function getEventMatches(eventKey: string): Promise<StatboticsMatch
 export async function proxyStatboticsRequest(
   path: string,
   params?: QueryParams,
+  options?: { bypassCache?: boolean },
 ): Promise<unknown> {
-  return statboticsFetch<unknown>(path, params);
+  return statboticsFetch<unknown>(path, params, options);
 }
 
 export function teamPayloadFromOverall(

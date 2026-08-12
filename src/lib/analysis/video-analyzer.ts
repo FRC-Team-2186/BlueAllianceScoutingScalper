@@ -5,7 +5,9 @@ import { RateLimitError } from "@/lib/analysis/rate-limiter";
 import { getMatch } from "@/lib/api/tba-client";
 import { extractYoutubeVideoId } from "@/lib/api/youtube";
 import {
+  deleteCachedAnalysis,
   getCachedAnalysis,
+  hasCompareSchemaKeys,
   saveAnalysisCache,
 } from "@/lib/cache/analysis-store";
 import { createMockAnalysis } from "@/lib/mock/mock-analysis";
@@ -14,6 +16,7 @@ import type { MatchAnalysis } from "@/lib/types/analysis";
 export interface AnalyzeVideoOptions {
   matchKey: string;
   teamKey?: string;
+  /** When true, ignore existing cache and re-run Gemini with the current prompt/schema. */
   force?: boolean;
 }
 
@@ -33,9 +36,15 @@ export async function analyzeMatchVideo(
     match.alliances.red.team_keys[0] ??
     match.alliances.blue.team_keys[0];
 
-  if (!options.force) {
-    const cached = await getCachedAnalysis(eventKey, match.key);
-    if (cached) {
+  if (options.force) {
+    await deleteCachedAnalysis(eventKey, match.key);
+  } else {
+    // Only reuse cache entries that include the current compare schema keys.
+    const cached = await getCachedAnalysis(eventKey, match.key, {
+      allowStaleSchema: false,
+      deleteStale: true,
+    });
+    if (cached && hasCompareSchemaKeys(cached)) {
       return { status: "cached", analysis: cached };
     }
   }

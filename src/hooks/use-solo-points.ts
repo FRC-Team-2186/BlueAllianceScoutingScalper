@@ -13,10 +13,19 @@ interface SoloPointsResponse {
   error?: string;
 }
 
-export function fetchSoloPoints(team: number, eventKey: string) {
-  return fetch(
-    `/api/scoring/solo?team=${team}&event=${encodeURIComponent(eventKey)}`,
-  ).then(async (response) => {
+export function fetchSoloPoints(
+  team: number,
+  eventKey: string,
+  options?: { force?: boolean },
+) {
+  const search = new URLSearchParams({
+    team: String(team),
+    event: eventKey,
+  });
+  if (options?.force) search.set("force", "true");
+  return fetch(`/api/scoring/solo?${search.toString()}`, {
+    cache: options?.force ? "no-store" : "default",
+  }).then(async (response) => {
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       console.error("[SoloPoints] error", response.status, body);

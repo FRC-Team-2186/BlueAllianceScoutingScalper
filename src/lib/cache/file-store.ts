@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const CACHE_ROOT = path.join(process.cwd(), "data", "cache");
@@ -44,6 +44,19 @@ export async function writeJsonCache<T>(
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   return filePath;
+}
+
+export async function deleteJsonCache(segments: string[]): Promise<boolean> {
+  const filePath = resolveCachePath(segments);
+  try {
+    await rm(filePath, { force: true });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function listJsonCacheFiles(
