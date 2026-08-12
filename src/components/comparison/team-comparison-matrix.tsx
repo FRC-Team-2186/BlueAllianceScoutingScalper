@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Database, Eye, Loader2 } from "lucide-react";
 import { useQueries } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +31,7 @@ import {
   exportComparisonJson,
   type ComparisonRow,
 } from "@/lib/export/analysis-export";
-import { fetchStatboticsTeamEvents } from "@/lib/api/statbotics-browser";
+import { fetchStatboticsComparisonMetrics } from "@/lib/api/statbotics-browser";
 import { PUBLIC_CONFIG } from "@/lib/config/public";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -102,11 +102,30 @@ function TeamComparisonMatrixInner({
 
   const statboticsQueries = useQueries({
     queries: teams.map((team) => ({
-      queryKey: ["comparison-statbotics", team, eventKey],
-      queryFn: () => fetchStatboticsTeamEvents({ team, event: eventKey }),
-      enabled: Boolean(team && eventKey),
+      queryKey: ["comparison-statbotics", team, year, eventKey],
+      queryFn: () =>
+        fetchStatboticsComparisonMetrics({ team, eventKey, year }),
+      enabled: Boolean(team && eventKey && year),
+      staleTime: 30_000,
     })),
   });
+
+  useEffect(() => {
+    for (const [index, query] of statboticsQueries.entries()) {
+      if (query.isError) {
+        console.error(
+          `[Compare] Statbotics metrics failed for team ${teams[index]} (${year}/${eventKey})`,
+          query.error,
+        );
+      }
+    }
+    if (aiSummaryQuery.isError) {
+      console.error(
+        `[Compare] AI summary failed for event ${eventKey}`,
+        aiSummaryQuery.error,
+      );
+    }
+  }, [statboticsQueries, aiSummaryQuery.isError, aiSummaryQuery.error, teams, year, eventKey]);
 
   const rows = useMemo(() => {
     const aiByTeam = new Map(
@@ -115,21 +134,21 @@ function TeamComparisonMatrixInner({
 
     const comparisonRows: ComparisonRow[] = teams.map((team, index) => {
       const teamKey = `frc${team}`;
-      const statEvent = statboticsQueries[index]?.data?.[0];
+      const stats = statboticsQueries[index]?.data;
       const ai = aiByTeam.get(teamKey);
-      const epa = statEvent?.norm_epa?.mean ?? statEvent?.epa?.mean;
-      const autoPoints = ai?.aiAutoScore ?? statEvent?.epa?.auto ?? 0;
-      const teleopCycles = ai?.aiTeleopCycles ?? statEvent?.epa?.teleop ?? 0;
-      const endgamePoints = ai?.aiEndgamePoints ?? statEvent?.epa?.endgame ?? 0;
+      const epa = stats?.epa;
+      const autoPoints = ai?.aiAutoScore ?? stats?.auto ?? 0;
+      const teleopCycles = ai?.aiTeleopCycles ?? stats?.teleop ?? 0;
+      const endgamePoints = ai?.aiEndgamePoints ?? stats?.endgame ?? 0;
       const defenseRating = 0.5;
       const verifiedVideo = Boolean(ai?.verifiedVideo);
 
       const base: ComparisonRow = {
         team,
         teamKey,
-        nickname: statEvent?.name,
+        nickname: stats?.nickname,
         epa,
-        winrate: statEvent?.record?.winrate,
+        winrate: stats?.winrate,
         autoPoints,
         teleopCycles,
         endgamePoints,
@@ -142,6 +161,7 @@ function TeamComparisonMatrixInner({
         endgameClimbRate: ai?.endgameClimbRate,
         verifiedVideo,
         aiMatchCount: ai?.matchCount ?? 0,
+        epaSource: stats?.source,
         dataSource: verifiedVideo
           ? "verified-video"
           : ai
@@ -160,7 +180,9 @@ function TeamComparisonMatrixInner({
       const right = b[sortMetric] ?? 0;
       return right - left;
     });
-  }, [teams, statboticsQueries, sortMetric, aiSummaryQuery.data]);
+    // year/eventKey intentionally included so the matrix rebuilds as soon as selectors change
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selector-driven refresh
+  }, [teams, year, eventKey, sortMetric, aiSummaryQuery.data, statboticsQueries]);
 
   function applyFilters() {
     setTeams(parseTeamsInput(teamsInput));
@@ -183,8 +205,8 @@ function TeamComparisonMatrixInner({
   }
 
   const isLoading =
-    statboticsQueries.some((query) => query.isLoading) ||
-    aiSummaryQuery.isLoading;
+    statboticsQueries.some((query) => query.isFetching) ||
+    aiSummaryQuery.isFetching;
 
   return (
     <div className="space-y-4">
@@ -253,11 +275,14 @@ function TeamComparisonMatrixInner({
           </Badge>
         )}
         <Badge variant="secondary">
+          {year} · {eventKey}
+        </Badge>
+        <Badge variant="secondary">
           {aiSummaryQuery.data?.analysisCount ?? 0} cached videos
         </Badge>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto" key={`${year}-${eventKey}-${teams.join(",")}`}>
         <Table>
           <TableHeader>
             <TableRow>
@@ -281,7 +306,7 @@ function TeamComparisonMatrixInner({
           <TableBody>
             {rows.map((row, index) => (
               <TableRow
-                key={row.team}
+                key={`${year}-${eventKey}-${row.team}`}
                 className={cn(row.verifiedVideo && "bg-emerald-500/5")}
               >
                 <TableCell>{index + 1}</TableCell>
@@ -292,6 +317,7 @@ function TeamComparisonMatrixInner({
                     {row.aiMatchCount > 0
                       ? ` · ${row.aiMatchCount} analyzed match${row.aiMatchCount === 1 ? "" : "es"}`
                       : ""}
+                    {row.epaSource === "team-overall" ? " · overall EPA fallback" : ""}
                   </div>
                 </TableCell>
                 <TableCell>

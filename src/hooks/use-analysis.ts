@@ -71,7 +71,17 @@ export function useEventAiSummary(eventKey: string) {
         `/api/cache/analysis/${eventKey}?include=summary`,
       );
       if (!response.ok) {
-        throw new Error("Failed to load AI analysis summary");
+        const body = await response.json().catch(() => ({}));
+        console.error(
+          "[AI Summary API]",
+          eventKey,
+          response.status,
+          body,
+        );
+        throw new Error(
+          (body as { error?: string }).error ??
+            "Failed to load AI analysis summary",
+        );
       }
       return response.json() as Promise<EventAiSummaryResponse>;
     },
