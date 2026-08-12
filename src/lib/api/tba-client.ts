@@ -1,3 +1,4 @@
+import { sortMatchesChronologically } from "@/lib/api/match-sort";
 import type {
   TbaEvent,
   TbaMatch,
@@ -73,7 +74,10 @@ export async function getTeamEventMatches(
   teamKey: string,
   eventKey: string,
 ): Promise<TbaMatch[]> {
-  return tbaFetch<TbaMatch[]>(`/team/${teamKey}/event/${eventKey}/matches`);
+  const matches = await tbaFetch<TbaMatch[]>(
+    `/team/${teamKey}/event/${eventKey}/matches`,
+  );
+  return sortMatchesChronologically(matches);
 }
 
 export async function getTeamEventStatus(
@@ -90,7 +94,8 @@ export async function getEvent(eventKey: string): Promise<TbaEvent> {
 }
 
 export async function getEventMatches(eventKey: string): Promise<TbaMatch[]> {
-  return tbaFetch<TbaMatch[]>(`/event/${eventKey}/matches`);
+  const matches = await tbaFetch<TbaMatch[]>(`/event/${eventKey}/matches`);
+  return sortMatchesChronologically(matches);
 }
 
 export async function getMatch(matchKey: string): Promise<TbaMatch> {

@@ -30,6 +30,7 @@ import {
 } from "@/hooks/use-tba";
 import { useStatboticsTeam } from "@/hooks/use-statbotics";
 import { useEventAiSummary } from "@/hooks/use-analysis";
+import { sortMatchesChronologically } from "@/lib/api/match-sort";
 import { extractYoutubeVideoId } from "@/lib/api/youtube";
 import { PUBLIC_CONFIG } from "@/lib/config/public";
 
@@ -58,7 +59,7 @@ function DashboardShellInner() {
   const matchesQuery = useTbaTeamEventMatches(teamKey, eventKey);
   const aiSummaryQuery = useEventAiSummary(eventKey);
 
-  const matches = matchesQuery.data ?? [];
+  const matches = sortMatchesChronologically(matchesQuery.data ?? []);
   const matchesWithVideo = matches.filter((match) => extractYoutubeVideoId(match));
   const verifiedTeams = aiSummaryQuery.data?.teams.filter((team) => team.verifiedVideo) ?? [];
 
