@@ -1,10 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { TbaApiError, proxyTbaRequest } from "@/lib/api/tba-client";
 import { hasTbaApiKey } from "@/lib/config";
+import { filterOfficialEvents } from "@/lib/tba/official-events";
+import type { TbaEvent } from "@/lib/types/tba";
 
 type RouteContext = {
   params: Promise<{ path: string[] }>;
 };
+
+function shouldFilterOfficialEvents(pathSegments: string[]): boolean {
+  // /team/{team}/events/{year} or /events/{year}
+  if (pathSegments[0] === "events" && pathSegments.length >= 2) return true;
+  if (
+    pathSegments[0] === "team" &&
+    pathSegments[2] === "events" &&
+    pathSegments.length >= 4
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export async function GET(request: NextRequest, context: RouteContext) {
   if (!hasTbaApiKey()) {
@@ -27,11 +42,17 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
   try {
     const data = await proxyTbaRequest(requestedUrl);
+    const filtered =
+      shouldFilterOfficialEvents(path) && Array.isArray(data)
+        ? filterOfficialEvents(data as TbaEvent[])
+        : data;
+
     console.log("[TBA proxy] success", {
       requestedUrl,
-      itemCount: Array.isArray(data) ? data.length : undefined,
+      itemCount: Array.isArray(filtered) ? filtered.length : undefined,
+      officialOnly: shouldFilterOfficialEvents(path),
     });
-    return NextResponse.json(data);
+    return NextResponse.json(filtered);
   } catch (error) {
     if (error instanceof TbaApiError) {
       console.error("[TBA proxy] upstream error", {
