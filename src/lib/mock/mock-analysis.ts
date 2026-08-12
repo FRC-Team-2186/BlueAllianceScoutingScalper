@@ -11,6 +11,15 @@ export function createMockAnalysis(
   const redScore = match.alliances.red.score;
   const blueScore = match.alliances.blue.score;
 
+  const compareMetrics = {
+    ai_auto: 6,
+    ai_teleop: 12,
+    ai_endgame: 10,
+    climb_pct: 1,
+    vision_conf: 0.5,
+    weighted_score: 6 * 1.2 + 12 * 1.5 + 10 * 1.1 + 1 * 10 + 0.5 * 5,
+  };
+
   const base: MatchAnalysis = {
     matchKey: match.key,
     eventKey: match.event_key,
@@ -18,6 +27,25 @@ export function createMockAnalysis(
     source: "mock",
     analyzedAt: new Date().toISOString(),
     model: "mock-v1",
+    focusTeamKey: teamKey,
+    compareMetrics,
+    phaseTimeline: {
+      autonomous: {
+        startPosition: "00:00 — mock start",
+        preLoadScored: "00:08 — mock pre-load",
+        mobility: "00:12 — left starting zone",
+      },
+      teleop: {
+        cycleCount: 3,
+        intakeLocations: [{ time: "01:20", location: "mock intake" }],
+        scoringLocations: [{ time: "01:32", location: "mock score" }],
+      },
+      endgame: {
+        status: "climb",
+        statusTime: "02:15",
+        notes: "Mock cage climb",
+      },
+    },
     actions: [
       {
         timestampSec: 8,
