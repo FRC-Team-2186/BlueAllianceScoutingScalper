@@ -1,0 +1,29 @@
+# Dependencies & build artifacts
+node_modules
+.next
+out
+build
+coverage
+
+# Env / secrets / local cache
+.env*
+!.env.local.example
+data/cache
+
+# Git / IDE / docs noise
+.git
+.github
+.gitignore
+*.md
+!README.md
+.DS_Store
+.cursor
+AGENTS.md
+CLAUDE.md
+
+# Misc
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+next-env.d.ts
