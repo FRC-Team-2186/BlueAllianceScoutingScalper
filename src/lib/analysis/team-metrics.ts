@@ -4,9 +4,11 @@ import type {
   RobotFeatures,
 } from "@/lib/types/analysis";
 import {
+  ANALYZING_ROBOT_FEATURE,
   emptyRobotFeatures,
   normalizeCompareMetrics,
   normalizeRobotFeatures,
+  TBD_ROBOT_FEATURE,
   UNCONFIRMED_ROBOT_FEATURE,
 } from "@/lib/types/analysis";
 
@@ -52,7 +54,14 @@ function majorityString(values: string[], fallback: string): string {
   const counts = new Map<string, number>();
   for (const value of values) {
     const trimmed = value.trim();
-    if (!trimmed || trimmed === UNCONFIRMED_ROBOT_FEATURE) continue;
+    if (
+      !trimmed ||
+      trimmed === UNCONFIRMED_ROBOT_FEATURE ||
+      trimmed === TBD_ROBOT_FEATURE ||
+      trimmed === ANALYZING_ROBOT_FEATURE
+    ) {
+      continue;
+    }
     counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
   }
   let best = fallback;
@@ -176,19 +185,19 @@ export function aggregateTeamAiMetrics(
   const drivetrain = featuresConfirmed
     ? majorityString(
         featureRows.map((row) => row.drivetrain),
-        UNCONFIRMED_ROBOT_FEATURE,
+        TBD_ROBOT_FEATURE,
       )
     : empty.drivetrain;
   const shooter_type = featuresConfirmed
     ? majorityString(
         featureRows.map((row) => row.shooter_type),
-        UNCONFIRMED_ROBOT_FEATURE,
+        TBD_ROBOT_FEATURE,
       )
     : empty.shooter_type;
   const endgame_mechanism = featuresConfirmed
     ? majorityString(
         featureRows.map((row) => row.endgame_mechanism),
-        UNCONFIRMED_ROBOT_FEATURE,
+        TBD_ROBOT_FEATURE,
       )
     : empty.endgame_mechanism;
   const shooter_count = featuresConfirmed

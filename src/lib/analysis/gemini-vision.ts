@@ -297,7 +297,7 @@ function ensureCompareKeys(raw: Record<string, unknown>): Record<string, unknown
         ? raw.drivetrain
         : typeof nestedFeatures.drivetrain === "string"
           ? nestedFeatures.drivetrain
-          : "Unconfirmed",
+          : "TBD",
     shooter_count: coerceNumber(
       raw.shooter_count ?? nestedFeatures.shooter_count,
     ),
@@ -306,13 +306,13 @@ function ensureCompareKeys(raw: Record<string, unknown>): Record<string, unknown
         ? raw.shooter_type
         : typeof nestedFeatures.shooter_type === "string"
           ? nestedFeatures.shooter_type
-          : "Unconfirmed",
+          : "TBD",
     endgame_mechanism:
       typeof raw.endgame_mechanism === "string"
         ? raw.endgame_mechanism
         : typeof nestedFeatures.endgame_mechanism === "string"
           ? nestedFeatures.endgame_mechanism
-          : "Unconfirmed",
+          : "TBD",
     ai_confidence: coerceNumber(
       raw.ai_confidence ?? nestedFeatures.ai_confidence,
     ),

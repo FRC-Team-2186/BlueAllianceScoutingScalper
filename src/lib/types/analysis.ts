@@ -125,6 +125,7 @@ export interface CacheIndexEntry {
 
 export const UNCONFIRMED_ROBOT_FEATURE = "Unconfirmed";
 export const TBD_ROBOT_FEATURE = "TBD";
+export const ANALYZING_ROBOT_FEATURE = "Analyzing...";
 
 export function emptyCompareMetrics(): CompareMetrics {
   return {
@@ -139,10 +140,10 @@ export function emptyCompareMetrics(): CompareMetrics {
 
 export function emptyRobotFeatures(): RobotFeatures {
   return {
-    drivetrain: UNCONFIRMED_ROBOT_FEATURE,
+    drivetrain: TBD_ROBOT_FEATURE,
     shooter_count: 0,
-    shooter_type: UNCONFIRMED_ROBOT_FEATURE,
-    endgame_mechanism: UNCONFIRMED_ROBOT_FEATURE,
+    shooter_type: TBD_ROBOT_FEATURE,
+    endgame_mechanism: TBD_ROBOT_FEATURE,
     ai_confidence: 0,
   };
 }
@@ -177,16 +178,16 @@ export function normalizeRobotFeatures(
   const drivetrain =
     typeof partial.drivetrain === "string" && partial.drivetrain.trim()
       ? partial.drivetrain.trim()
-      : UNCONFIRMED_ROBOT_FEATURE;
+      : TBD_ROBOT_FEATURE;
   const shooter_type =
     typeof partial.shooter_type === "string" && partial.shooter_type.trim()
       ? partial.shooter_type.trim()
-      : UNCONFIRMED_ROBOT_FEATURE;
+      : TBD_ROBOT_FEATURE;
   const endgame_mechanism =
     typeof partial.endgame_mechanism === "string" &&
     partial.endgame_mechanism.trim()
       ? partial.endgame_mechanism.trim()
-      : UNCONFIRMED_ROBOT_FEATURE;
+      : TBD_ROBOT_FEATURE;
 
   return {
     drivetrain,
@@ -201,12 +202,24 @@ export function normalizeRobotFeatures(
   };
 }
 
-/** Display helpers for /compare feature cells. */
+/** Display helpers for /compare feature cells (never numeric 0.0 placeholders). */
 export function formatRobotFeatureText(
   value: string | null | undefined,
+  options?: { pending?: boolean },
 ): string {
-  if (value == null || value.trim() === "" || value === "—") {
-    return UNCONFIRMED_ROBOT_FEATURE;
+  if (options?.pending) return ANALYZING_ROBOT_FEATURE;
+  if (
+    value == null ||
+    value.trim() === "" ||
+    value === "—" ||
+    value === "0" ||
+    value === "0.0" ||
+    value === UNCONFIRMED_ROBOT_FEATURE
+  ) {
+    return TBD_ROBOT_FEATURE;
+  }
+  if (value === ANALYZING_ROBOT_FEATURE || value === TBD_ROBOT_FEATURE) {
+    return value;
   }
   return value;
 }

@@ -33,7 +33,6 @@ import {
   exportComparisonJson,
   formatCompareCell,
   formatFeatureCell,
-  formatShootersCell,
   metricOrZero,
   type ComparisonRow,
   type CompareSortKey,
@@ -41,10 +40,6 @@ import {
 import { fetchStatboticsComparisonMetrics } from "@/lib/api/statbotics-browser";
 import { ensureCompareClientSchemaVersion } from "@/lib/cache/force-refresh";
 import { defaultCompareTeams } from "@/lib/home-team";
-import {
-  UNCONFIRMED_ROBOT_FEATURE,
-  TBD_ROBOT_FEATURE,
-} from "@/lib/types/analysis";
 import { PUBLIC_CONFIG } from "@/lib/config/public";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -247,6 +242,25 @@ function TeamComparisonMatrixInner({
       const ai = aiByTeam.get(teamKey);
       const verifiedVideo = Boolean(ai?.verifiedVideo);
       const featuresConfirmed = Boolean(ai?.featuresConfirmed);
+      // Pending Gemini visual analysis → "Analyzing..."; empty → "TBD" (never 0.0).
+      const featuresPending =
+        !featuresConfirmed &&
+        (showAutoAnalyzing ||
+          analysisQueued ||
+          (aiSummaryQuery.isSuccess && analysisCount === 0) ||
+          aiSummaryQuery.isFetching ||
+          isRefreshing);
+
+      const featureOptions = { pending: featuresPending };
+      const drivetrain = featuresConfirmed
+        ? formatFeatureCell(ai?.drivetrain)
+        : formatFeatureCell(undefined, featureOptions);
+      const shooter_type = featuresConfirmed
+        ? formatFeatureCell(ai?.shooter_type)
+        : formatFeatureCell(undefined, featureOptions);
+      const endgame_mechanism = featuresConfirmed
+        ? formatFeatureCell(ai?.endgame_mechanism)
+        : formatFeatureCell(undefined, featureOptions);
 
       return {
         team,
@@ -257,20 +271,15 @@ function TeamComparisonMatrixInner({
         epaTeleop: stats?.teleop,
         epaEndgame: stats?.endgame,
         winrate: stats?.winrate,
-        drivetrain: featuresConfirmed
-          ? formatFeatureCell(ai?.drivetrain)
-          : UNCONFIRMED_ROBOT_FEATURE,
+        drivetrain,
+        shooter_type,
+        endgame_mechanism,
         shooter_count: featuresConfirmed ? (ai?.shooter_count ?? null) : null,
-        shooter_type: featuresConfirmed
-          ? formatFeatureCell(ai?.shooter_type)
-          : UNCONFIRMED_ROBOT_FEATURE,
-        endgame_mechanism: featuresConfirmed
-          ? formatFeatureCell(ai?.endgame_mechanism)
-          : UNCONFIRMED_ROBOT_FEATURE,
         ai_confidence: featuresConfirmed
           ? (ai?.ai_confidence ?? ai?.vision_conf ?? ai?.visionConfidence)
           : undefined,
         featuresConfirmed,
+        featuresPending,
         verifiedVideo,
         aiMatchCount: ai?.matchCount ?? 0,
         epaSource: stats?.source,
@@ -295,6 +304,12 @@ function TeamComparisonMatrixInner({
     eventKey,
     sortMetric,
     aiSummaryQuery.data,
+    aiSummaryQuery.isFetching,
+    aiSummaryQuery.isSuccess,
+    analysisCount,
+    analysisQueued,
+    showAutoAnalyzing,
+    isRefreshing,
     statboticsQueries,
     refreshNonce,
   ]);
@@ -459,13 +474,11 @@ function TeamComparisonMatrixInner({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="epa">Statbotics EPA</SelectItem>
+            <SelectItem value="epa">Statbotics Total EPA</SelectItem>
             <SelectItem value="epaAuto">Auto EPA</SelectItem>
             <SelectItem value="epaTeleop">Teleop EPA</SelectItem>
             <SelectItem value="epaEndgame">Endgame EPA</SelectItem>
             <SelectItem value="winrate">Win Rate</SelectItem>
-            <SelectItem value="ai_confidence">AI Conf</SelectItem>
-            <SelectItem value="shooter_count">Shooters</SelectItem>
           </SelectContent>
         </Select>
 
@@ -502,16 +515,14 @@ function TeamComparisonMatrixInner({
             <TableRow>
               <TableHead>Rank</TableHead>
               <TableHead>Team</TableHead>
-              <TableHead>Statbotics EPA</TableHead>
+              <TableHead>Statbotics Total EPA</TableHead>
               <TableHead>Auto EPA</TableHead>
               <TableHead>Teleop EPA</TableHead>
               <TableHead>Endgame EPA</TableHead>
               <TableHead>Win Rate</TableHead>
               <TableHead>Drivetrain</TableHead>
-              <TableHead>Shooters</TableHead>
               <TableHead>Shooter Type</TableHead>
               <TableHead>Endgame Mechanism</TableHead>
-              <TableHead>AI Conf</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -558,21 +569,20 @@ function TeamComparisonMatrixInner({
                     ? "N/A"
                     : `${(row.winrate * 100).toFixed(1)}%`}
                 </TableCell>
-                <TableCell>{formatFeatureCell(row.drivetrain)}</TableCell>
                 <TableCell>
-                  {formatShootersCell(row.shooter_count, row.featuresConfirmed)}
-                </TableCell>
-                <TableCell>{formatFeatureCell(row.shooter_type)}</TableCell>
-                <TableCell>
-                  {formatFeatureCell(row.endgame_mechanism)}
+                  {formatFeatureCell(row.drivetrain, {
+                    pending: row.featuresPending && !row.featuresConfirmed,
+                  })}
                 </TableCell>
                 <TableCell>
-                  {row.featuresConfirmed
-                    ? formatCompareCell(row.ai_confidence, {
-                        asPercent: true,
-                        emptyAs: "TBD",
-                      })
-                    : TBD_ROBOT_FEATURE}
+                  {formatFeatureCell(row.shooter_type, {
+                    pending: row.featuresPending && !row.featuresConfirmed,
+                  })}
+                </TableCell>
+                <TableCell>
+                  {formatFeatureCell(row.endgame_mechanism, {
+                    pending: row.featuresPending && !row.featuresConfirmed,
+                  })}
                 </TableCell>
               </TableRow>
             ))}

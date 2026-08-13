@@ -16,8 +16,8 @@ export default function ComparePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Multi-Team Comparison</h1>
           <p className="text-sm text-muted-foreground">
-            Statbotics EPA (total/auto/teleop/endgame) plus Gemini robot feature
-            extraction (drivetrain, shooters, endgame mechanism).
+            Statbotics EPA breakdown (total/auto/teleop/endgame) plus Gemini
+            visual classification (drivetrain, shooter type, endgame mechanism).
           </p>
         </div>
         <Link href="/" className={buttonVariants({ variant: "outline", size: "sm" })}>
@@ -29,8 +29,8 @@ export default function ComparePage() {
         <CardHeader>
           <CardTitle>Comparison Matrix</CardTitle>
           <CardDescription>
-            Statbotics numeric EPA with Gemini visual/mechanical classification.
-            Missing feature fields show as Unconfirmed / TBD. Use Force Refresh or
+            Statbotics uses epa.breakdown.*_points (never alliance÷3). Pending
+            Gemini features show as Analyzing… / TBD. Use Force Refresh or
             <code className="mx-1 rounded bg-muted px-1">?force=true</code>
             to re-run analysis.
           </CardDescription>

@@ -31,7 +31,6 @@ const ENDGAME_POINTS_2025: Record<string, number> = {
   Park: 2,
   ShallowCage: 6,
   DeepCage: 12,
-  // Older / alternate labels
   Parked: 2,
   Shallow: 6,
   Deep: 12,
@@ -43,10 +42,6 @@ const ENDGAME_POINTS_2025: Record<string, number> = {
 function asRecord(value: unknown): AllianceBreakdown | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as AllianceBreakdown;
-}
-
-function num(value: unknown, fallback = 0): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function endgamePointsFromValue(value: unknown): number {
@@ -78,8 +73,10 @@ function getAllianceAndStation(
 
 /**
  * Extract single-robot Auto / Teleop / Endgame points from a TBA match.
- * Uses per-robot score_breakdown fields when available and estimates teleop
- * as an equal share of alliance teleop points (TBA does not attribute coral/algae per robot).
+ *
+ * ONLY uses per-robot score_breakdown fields (e.g. autoLineRobotN, endGameRobotN).
+ * Never divides alliance totals by 3 — Statbotics EPA breakdown is the source of
+ * truth for expected points on /compare.
  */
 export function extractRobotPointsFromTbaMatch(
   match: TbaMatch,
@@ -95,7 +92,7 @@ export function extractRobotPointsFromTbaMatch(
     : null;
 
   let auto = 0;
-  let teleop = 0;
+  const teleop = 0;
   let endgame = 0;
   let source: RobotMatchPoints["source"] = "estimated";
 
@@ -109,59 +106,30 @@ export function extractRobotPointsFromTbaMatch(
       source = "tba";
     }
 
-    // Some years expose mobility points only at alliance level — leave as line-only when present.
     if (endKey in allianceBreakdown) {
       endgame += endgamePointsFromValue(allianceBreakdown[endKey]);
       source = "tba";
     }
 
-    const allianceTeleop = num(
-      allianceBreakdown.teleopPoints ?? allianceBreakdown.teleop_points,
-    );
-    if (allianceTeleop > 0) {
-      teleop = Math.round((allianceTeleop / 3) * 10) / 10;
-      notes.push("Teleop estimated as 1/3 of alliance teleopPoints (TBA has no per-robot piece credits).");
-      if (source === "tba") source = "hybrid";
-    }
-
-    // If we got no per-robot auto line, estimate auto share from alliance autoPoints.
-    if (auto === 0) {
-      const allianceAuto = num(allianceBreakdown.autoPoints);
-      if (allianceAuto > 0) {
-        auto = Math.round((allianceAuto / 3) * 10) / 10;
-        notes.push("Auto estimated as 1/3 of alliance autoPoints.");
-        if (source === "tba") source = "hybrid";
-      }
-    }
-
-    // If endgame robot field missing, estimate from barge/endgame alliance points.
-    if (endgame === 0) {
-      const allianceEnd =
-        num(allianceBreakdown.endGameBargePoints) ||
-        num(allianceBreakdown.endgamePoints) ||
-        num(allianceBreakdown.totalPoints) -
-          num(allianceBreakdown.autoPoints) -
-          num(allianceBreakdown.teleopPoints) -
-          num(allianceBreakdown.foulPoints);
-      if (allianceEnd > 0) {
-        endgame = Math.round((allianceEnd / 3) * 10) / 10;
-        notes.push("Endgame estimated as 1/3 of alliance endgame/barge points.");
-        if (source === "tba") source = "hybrid";
-      }
+    // Teleop has no reliable per-robot TBA attribution — leave 0 and note it.
+    // Callers should prefer Statbotics epa.breakdown.teleop_points for expected teleop.
+    if (auto > 0 || endgame > 0) {
+      notes.push(
+        "TBA per-robot fields only (no alliance÷3). Prefer Statbotics epa.breakdown for expected points.",
+      );
+    } else {
+      notes.push(
+        "No per-robot TBA auto/endgame fields; use Statbotics epa.breakdown.*_points instead of alliance splits.",
+      );
     }
   } else {
-    // No breakdown — split final alliance score roughly 20/60/20 auto/teleop/endgame.
-    const allianceScore =
-      placement.alliance === "red"
-        ? match.alliances.red.score
-        : match.alliances.blue.score;
-    const share = allianceScore / 3;
-    auto = Math.round(share * 0.2 * 10) / 10;
-    teleop = Math.round(share * 0.6 * 10) / 10;
-    endgame = Math.round(share * 0.2 * 10) / 10;
-    notes.push("No TBA score_breakdown; rough split of alliance score.");
+    notes.push(
+      "No TBA score_breakdown; solo TBA points unavailable (do not invent alliance÷3 shares).",
+    );
   }
 
+  // If we have nothing per-robot, still return a zeroed row so callers know the
+  // team played — but totals stay 0 (Statbotics should supply expected points).
   return {
     teamKey,
     matchKey: match.key,
@@ -217,7 +185,7 @@ export function extractRobotPointsFromAnalysis(
   };
 }
 
-/** Prefer AI individual attribution; fall back to TBA-derived solo points. */
+/** Prefer AI individual attribution; fall back to TBA per-robot fields only. */
 export function resolveRobotMatchPoints(options: {
   match: TbaMatch;
   teamKey: string;
@@ -240,7 +208,7 @@ export function resolveRobotMatchPoints(options: {
       source: "hybrid",
       notes: [
         ...(tba.notes ?? []),
-        "AI vision individual points preferred over TBA estimates for Auto/Teleop/Endgame.",
+        "AI vision individual points preferred over TBA per-robot fields.",
       ],
     };
   }

@@ -71,13 +71,14 @@ ${frameManifest}
 Analyze robot actions across Auto (0-15s), Teleop, and Endgame (last ~30s).
 Attribute points to INDIVIDUAL robots (not just alliance totals).
 
-ROBOT FEATURE ANALYSIS (visual / mechanical classification):
-Inspect match/pit-style video frames (and any TBA team image clips in the samples) for the focus robot and classify:
-- drivetrain: one of Swerve, Tank/Differential, Mechanum, or other clear label
+ROBOT FEATURE ANALYSIS (visual / mechanical classification ONLY):
+Inspect match/pit-style video frames (and any TBA team image clips in the samples) for the focus robot and classify mechanical features only:
+- drivetrain: one of Swerve, Tank, Mecanum (use the closest match; do not invent point scores here)
 - shooter_count: integer count of scoring shooters (0 if intake-only / no shooter)
-- shooter_type: e.g. Single Flywheel, Dual Flywheel, Turreted, Fixed Angle, Catapult/Pneumatic, No Shooter/Intake Only
-- endgame_mechanism: e.g. Elevator Climber, Winch, Arm, Hook, None/Park
+- shooter_type: one of Single Flywheel, Dual Flywheel, Turreted, Fixed Angle, Catapult, None
+- endgame_mechanism: one of Elevator Climber, Winch, Arm, Hook (or None/Park if none)
 - ai_confidence: 0–1 confidence in these mechanical classifications
+Never estimate alliance scores or divide alliance totals by 3 for these fields.
 
 DETAILED PHASE TIMELINE (required):
 Provide structured MM:SS timestamps for the focus team${focusTeamNumber ? ` (Team ${focusTeamNumber})` : ""}:
@@ -153,7 +154,8 @@ COMPARE METRIC RULES (focus team):
 - weighted_score: ai_auto*1.2 + ai_teleop*1.5 + ai_endgame*1.1 + climb_pct*10 + vision_conf*5.
 
 ROBOT FEATURE RULES (focus team):
-- drivetrain / shooter_type / endgame_mechanism must be non-empty strings (use "Unconfirmed" only if truly impossible to tell).
+- drivetrain / shooter_type / endgame_mechanism must be non-empty strings (use "TBD" only if truly impossible to tell from the frames).
+- Prefer exact labels: Swerve|Tank|Mecanum; Single Flywheel|Dual Flywheel|Turreted|Fixed Angle|Catapult|None; Elevator Climber|Winch|Arm|Hook.
 - shooter_count is an integer >= 0.
 - ai_confidence is 0–1 for the mechanical classification (may differ from vision_conf).
 
