@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { EventYearFilters } from "@/components/dashboard/event-year-filters";
 import { useScoutFilters } from "@/hooks/use-scout-filters";
+import { useHomeTeam } from "@/hooks/use-home-team";
 import {
   useRuntimeConfig,
   useTbaTeam,
@@ -32,7 +33,6 @@ import { useStatboticsTeam } from "@/hooks/use-statbotics";
 import { useEventAiSummary } from "@/hooks/use-analysis";
 import { sortMatchesChronologically } from "@/lib/api/match-sort";
 import { extractYoutubeVideoId } from "@/lib/api/youtube";
-import { PUBLIC_CONFIG } from "@/lib/config/public";
 
 function StatusBadge({
   loading,
@@ -49,7 +49,8 @@ function StatusBadge({
 }
 
 function DashboardShellInner() {
-  const teamNumber = PUBLIC_CONFIG.defaultTeam;
+  const { homeTeamNumber } = useHomeTeam();
+  const teamNumber = homeTeamNumber;
   const teamKey = `frc${teamNumber}`;
   const { year, eventKey, setYear, setEventKey } = useScoutFilters();
 

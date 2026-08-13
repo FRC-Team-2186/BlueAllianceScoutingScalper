@@ -8,6 +8,12 @@ import {
   teamPayloadFromOverall,
   type QueryParams,
 } from "@/lib/api/statbotics-client";
+import {
+  extractEpaValue,
+  extractWinRate,
+  hasUsableEpaMetrics,
+  yearFromEventKey,
+} from "@/lib/api/statbotics-metrics";
 import { parseForceRefreshParams } from "@/lib/cache/force-refresh";
 
 type RouteContext = {
@@ -30,10 +36,24 @@ function parseTeamNumber(value: string | undefined): number | null {
   return Number.isFinite(team) && team > 0 ? team : null;
 }
 
+function withNormalizedMetrics(
+  payload: Record<string, unknown>,
+  fallback: string,
+): Record<string, unknown> {
+  return {
+    ...payload,
+    epa: extractEpaValue(payload) ?? null,
+    win_rate: extractWinRate(payload) ?? null,
+    _fallback: fallback,
+  };
+}
+
 /**
  * Resolve team metrics with cascading fallbacks:
- * event-specific → team_year → overall /team/{n}
- * Never throws; returns nulls when Statbotics has no data (common for 2026).
+ * event-specific → team_year (season) → overall /team/{n}
+ *
+ * Event payloads that exist but have null/N/A EPA do NOT short-circuit —
+ * we always continue to `/v3/team_year/{team}/{year}` so EPA/win rate populate.
  */
 async function resolveTeamMetrics(options: {
   team: number;
@@ -41,7 +61,9 @@ async function resolveTeamMetrics(options: {
   year?: number;
   bypassCache?: boolean;
 }): Promise<Record<string, unknown>> {
-  const { team, eventKey, year, bypassCache } = options;
+  const { team, eventKey, bypassCache } = options;
+  const year =
+    options.year ?? yearFromEventKey(eventKey) ?? undefined;
   const fetchOpts = { bypassCache };
 
   if (eventKey) {
@@ -52,31 +74,38 @@ async function resolveTeamMetrics(options: {
         fetchOpts,
       )) ??
       (
-        await statboticsFetchOrNull<Record<string, unknown>[]>("/team_events", {
-          team,
-          event: eventKey,
-          limit: 1,
-        }, fetchOpts)
+        await statboticsFetchOrNull<Record<string, unknown>[]>(
+          "/team_events",
+          {
+            team,
+            event: eventKey,
+            limit: 1,
+          },
+          fetchOpts,
+        )
       )?.[0];
 
-    if (eventData && !isEmptyPayload(eventData)) {
-      console.log("[Statbotics proxy] using team_event data", { team, eventKey });
-      return {
-        ...eventData,
-        epa:
-          (eventData.norm_epa as { current?: number; mean?: number } | undefined)
-            ?.mean ??
-          (eventData.epa as { mean?: number } | undefined)?.mean ??
-          null,
-        win_rate:
-          (eventData.record as { winrate?: number } | undefined)?.winrate ?? null,
-        _fallback: "event",
-      };
+    if (
+      eventData &&
+      !isEmptyPayload(eventData) &&
+      hasUsableEpaMetrics(eventData)
+    ) {
+      console.log("[Statbotics proxy] using team_event data", {
+        team,
+        eventKey,
+        epa: extractEpaValue(eventData),
+      });
+      return withNormalizedMetrics(eventData, "event");
     }
 
     console.warn(
-      "[Statbotics proxy] event EPA missing; falling back to team endpoint",
-      { team, eventKey },
+      "[Statbotics proxy] event EPA null/N/A; falling back to team_year season endpoint",
+      {
+        team,
+        eventKey,
+        year,
+        hadPayload: Boolean(eventData && !isEmptyPayload(eventData)),
+      },
     );
   }
 
@@ -88,31 +117,38 @@ async function resolveTeamMetrics(options: {
         fetchOpts,
       )) ??
       (
-        await statboticsFetchOrNull<Record<string, unknown>[]>("/team_years", {
-          team,
-          year,
-          limit: 1,
-        }, fetchOpts)
+        await statboticsFetchOrNull<Record<string, unknown>[]>(
+          "/team_years",
+          {
+            team,
+            year,
+            limit: 1,
+          },
+          fetchOpts,
+        )
       )?.[0];
 
-    if (yearData && !isEmptyPayload(yearData)) {
-      console.log("[Statbotics proxy] using team_year data", { team, year });
-      return {
-        ...yearData,
-        epa:
-          (yearData.norm_epa as { current?: number; mean?: number } | undefined)
-            ?.mean ??
-          (yearData.epa as { mean?: number } | undefined)?.mean ??
-          null,
-        win_rate:
-          (yearData.record as { winrate?: number } | undefined)?.winrate ?? null,
-        _fallback: "team-year",
-      };
+    if (
+      yearData &&
+      !isEmptyPayload(yearData) &&
+      hasUsableEpaMetrics(yearData)
+    ) {
+      console.log("[Statbotics proxy] using team_year season data", {
+        team,
+        year,
+        epa: extractEpaValue(yearData),
+      });
+      return withNormalizedMetrics(yearData, "team-year");
     }
+
+    console.warn(
+      "[Statbotics proxy] team_year EPA missing; falling back to overall team",
+      { team, year },
+    );
   }
 
   const overall = await getTeam(team, fetchOpts);
-  if (overall) {
+  if (overall && hasUsableEpaMetrics(overall)) {
     console.log("[Statbotics proxy] using overall team endpoint", { team });
     return teamPayloadFromOverall(overall);
   }

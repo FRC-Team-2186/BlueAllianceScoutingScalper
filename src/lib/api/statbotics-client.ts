@@ -224,9 +224,10 @@ export async function proxyStatboticsRequest(
 export function teamPayloadFromOverall(
   team: StatboticsTeam,
 ): Record<string, unknown> {
+  const epa = team.norm_epa?.current ?? team.norm_epa?.mean ?? null;
   return {
     ...team,
-    epa: team.norm_epa?.current ?? team.norm_epa?.mean ?? null,
+    epa,
     win_rate: team.record?.winrate ?? null,
     _fallback: "team",
   };

@@ -4,6 +4,10 @@ import type {
   StatboticsTeamEvent,
   StatboticsTeamYear,
 } from "@/lib/types/statbotics";
+import {
+  extractStatboticsMetrics,
+  hasUsableEpaMetrics,
+} from "@/lib/api/statbotics-metrics";
 
 export class BrowserApiError extends Error {
   constructor(
@@ -85,48 +89,13 @@ function isEmptyPayload(value: unknown): boolean {
   return false;
 }
 
-function extractMetrics(source: {
-  name?: string;
-  norm_epa?: { current?: number; mean?: number };
-  epa?:
-    | number
-    | null
-    | { mean?: number; auto?: number; teleop?: number; endgame?: number };
-  win_rate?: number | null;
-  record?: { winrate?: number };
-  _fallback?: string;
-}): {
-  epa?: number;
-  auto?: number;
-  teleop?: number;
-  endgame?: number;
-  winrate?: number;
-  fallback?: string;
-} {
-  const nested =
-    source.epa && typeof source.epa === "object" ? source.epa : undefined;
-  const flatEpa = typeof source.epa === "number" ? source.epa : undefined;
-  const epa =
-    source.norm_epa?.current ?? source.norm_epa?.mean ?? flatEpa ?? nested?.mean;
-
-  return {
-    epa: epa != null && Number.isFinite(epa) ? epa : undefined,
-    auto: nested?.auto,
-    teleop: nested?.teleop,
-    endgame: nested?.endgame,
-    winrate:
-      source.win_rate ??
-      source.record?.winrate ??
-      undefined,
-    fallback: source._fallback,
-  };
+function extractMetrics(source: Parameters<typeof extractStatboticsMetrics>[0]) {
+  return extractStatboticsMetrics(source);
 }
 
 function hasUsableMetrics(value: unknown): boolean {
   if (isEmptyPayload(value)) return false;
-  if (typeof value !== "object" || value == null) return false;
-  const metrics = extractMetrics(value as Parameters<typeof extractMetrics>[0]);
-  return metrics.epa != null || metrics.winrate != null;
+  return hasUsableEpaMetrics(value);
 }
 
 export function fetchStatboticsTeam(
@@ -255,7 +224,7 @@ export async function fetchStatboticsComparisonMetrics(params: {
       });
       return {
         ...base,
-        nickname: row.name,
+        nickname: metrics.nickname ?? row.name,
         epa: metrics.epa,
         winrate: metrics.winrate,
         auto: metrics.auto,

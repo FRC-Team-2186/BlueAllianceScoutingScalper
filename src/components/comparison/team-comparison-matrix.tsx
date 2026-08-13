@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, Database, Eye, Loader2, RefreshCw } from "lucide-react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
@@ -26,6 +26,7 @@ import {
 import { EventYearFilters } from "@/components/dashboard/event-year-filters";
 import { useEventAiSummary } from "@/hooks/use-analysis";
 import { useScoutFilters } from "@/hooks/use-scout-filters";
+import { useHomeTeam } from "@/hooks/use-home-team";
 import {
   computeWeightedScore,
   downloadTextFile,
@@ -39,6 +40,7 @@ import {
 import { fetchSoloPoints } from "@/hooks/use-solo-points";
 import { fetchStatboticsComparisonMetrics } from "@/lib/api/statbotics-browser";
 import { ensureCompareClientSchemaVersion } from "@/lib/cache/force-refresh";
+import { defaultCompareTeams } from "@/lib/home-team";
 import { PUBLIC_CONFIG } from "@/lib/config/public";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -95,28 +97,45 @@ function DataSourceBadge({ row }: { row: ComparisonRow }) {
 }
 
 function TeamComparisonMatrixInner({
-  initialTeams = [2186, 254, 1678],
+  initialTeams,
 }: TeamComparisonMatrixProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [isRefreshing, startRefreshTransition] = useTransition();
+  const { homeTeamNumber, hydrated: homeTeamHydrated } = useHomeTeam();
+  const autoAnalyzeKeyRef = useRef<string | null>(null);
 
   const forceFromUrl =
     searchParams.get("force") === "true" ||
     searchParams.get("force") === "1" ||
     searchParams.get("cache") === "false";
+  const teamsFromUrl = searchParams.get("teams");
 
   const { year, eventKey, setYear, setEventKey } = useScoutFilters({
     eventKey: PUBLIC_CONFIG.defaultEvent,
   });
-  const [teamsInput, setTeamsInput] = useState(initialTeams.join(", "));
+
+  const derivedTeams = useMemo(() => {
+    if (teamsFromUrl) {
+      const parsed = parseTeamsInput(teamsFromUrl);
+      if (parsed.length > 0) return parsed;
+    }
+    if (initialTeams && initialTeams.length > 0) return initialTeams;
+    return defaultCompareTeams(homeTeamNumber);
+  }, [teamsFromUrl, initialTeams, homeTeamNumber]);
+
+  const [teamsInput, setTeamsInput] = useState("");
+  const [teamsOverride, setTeamsOverride] = useState<number[] | null>(null);
+  const teams = teamsOverride ?? derivedTeams;
+  const teamsInputValue =
+    teamsInput || (homeTeamHydrated ? teams.join(", ") : String(homeTeamNumber));
   const [sortMetric, setSortMetric] = useState<SortMetric>("weighted_score");
-  const [teams, setTeams] = useState(initialTeams);
   const [showAiColumns, setShowAiColumns] = useState(true);
   const [showSoloColumns, setShowSoloColumns] = useState(true);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [analysisQueued, setAnalysisQueued] = useState(false);
   const force = forceFromUrl;
 
   useEffect(() => {
@@ -135,6 +154,84 @@ function TeamComparisonMatrixInner({
   }, [year, eventKey, teams, queryClient]);
 
   const aiSummaryQuery = useEventAiSummary(eventKey, { force });
+  const analysisCount = aiSummaryQuery.data?.analysisCount ?? 0;
+  const showAutoAnalyzing = analysisQueued && analysisCount === 0;
+
+  // When schema-valid video cache is empty, queue Gemini analysis for TBA videos.
+  useEffect(() => {
+    if (!aiSummaryQuery.isSuccess || teams.length === 0) return;
+    if (analysisCount > 0) return;
+
+    const key = `${eventKey}:${teams.join(",")}`;
+    if (autoAnalyzeKeyRef.current === key) return;
+    autoAnalyzeKeyRef.current = key;
+
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+    void (async () => {
+      const toastId = toast.loading(
+        "No schema-valid videos yet — queueing background Gemini analysis…",
+      );
+      try {
+        const response = await fetch(`/api/analyze/event?force=true`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({
+            eventKey,
+            teams,
+            force: true,
+            staleOnly: true,
+            limit: Math.max(8, teams.length * 4),
+          }),
+        });
+        const body = (await response.json().catch(() => ({}))) as {
+          message?: string;
+          error?: string;
+          queued?: unknown[];
+        };
+        if (!response.ok && response.status !== 202) {
+          throw new Error(body.error ?? "Failed to queue video analysis");
+        }
+        if (cancelled) return;
+        setAnalysisQueued(true);
+        toast.success(
+          body.message ??
+            `Queued ${(body.queued ?? []).length} match video(s) for analysis`,
+          { id: toastId },
+        );
+
+        pollTimer = setInterval(() => {
+          void queryClient.invalidateQueries({
+            queryKey: ["event-ai-summary", eventKey],
+          });
+        }, 8_000);
+        setTimeout(() => {
+          if (pollTimer) clearInterval(pollTimer);
+        }, 120_000);
+      } catch (error) {
+        if (cancelled) return;
+        autoAnalyzeKeyRef.current = null;
+        setAnalysisQueued(false);
+        toast.error(
+          error instanceof Error ? error.message : "Auto video analysis failed",
+          { id: toastId },
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [
+    aiSummaryQuery.isSuccess,
+    analysisCount,
+    eventKey,
+    teams,
+    queryClient,
+  ]);
 
   const statboticsQueries = useQueries({
     queries: teams.map((team) => ({
@@ -280,7 +377,16 @@ function TeamComparisonMatrixInner({
   ]);
 
   function applyFilters() {
-    setTeams(parseTeamsInput(teamsInput));
+    const next = parseTeamsInput(teamsInputValue);
+    setTeamsOverride(next);
+    setTeamsInput(next.join(", "));
+    const params = new URLSearchParams(searchParams.toString());
+    if (next.length > 0) {
+      params.set("teams", next.join(","));
+    } else {
+      params.delete("teams");
+    }
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   }
 
   function setForceInUrl(enabled: boolean) {
@@ -386,7 +492,7 @@ function TeamComparisonMatrixInner({
   return (
     <div className="space-y-4">
       <EventYearFilters
-        teamKey={`frc${PUBLIC_CONFIG.defaultTeam}`}
+        teamKey={`frc${homeTeamNumber}`}
         year={year}
         eventKey={eventKey}
         onYearChange={setYear}
@@ -395,7 +501,7 @@ function TeamComparisonMatrixInner({
 
       <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto]">
         <Input
-          value={teamsInput}
+          value={teamsInputValue}
           onChange={(event) => setTeamsInput(event.target.value)}
           placeholder="Teams (comma separated)"
         />
@@ -471,7 +577,13 @@ function TeamComparisonMatrixInner({
         {force && (
           <Badge variant="destructive">force refresh</Badge>
         )}
-
+        {showAutoAnalyzing && (
+          <Badge variant="outline" className="gap-1">
+            <Loader2 className="size-3 animate-spin" />
+            Analyzing videos…
+          </Badge>
+        )}
+        <Badge variant="secondary">Home {homeTeamNumber}</Badge>
         {isLoading && (
           <Badge variant="outline" className="gap-1">
             <Loader2 className="size-3 animate-spin" />
