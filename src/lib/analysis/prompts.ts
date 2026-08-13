@@ -53,6 +53,7 @@ TARGET TEAM IDENTIFICATION (STRICT):
 - Track ONLY this robot by bumper color (${bumper}) and 4-digit bumper number (${focusTeamNumber}).
 - Ignore other robots except when they interact with the focus team (defense contact, shared scoring race).
 - All compare_metrics values (ai_auto, ai_teleop, ai_endgame, climb_pct, vision_conf, weighted_score) MUST describe this focus team only.
+- robotFeatures (drivetrain, shooter_count, shooter_type, endgame_mechanism, ai_confidence) MUST describe this focus team only.
 `
     : "";
 
@@ -70,6 +71,14 @@ ${frameManifest}
 Analyze robot actions across Auto (0-15s), Teleop, and Endgame (last ~30s).
 Attribute points to INDIVIDUAL robots (not just alliance totals).
 
+ROBOT FEATURE ANALYSIS (visual / mechanical classification):
+Inspect match/pit-style video frames (and any TBA team image clips in the samples) for the focus robot and classify:
+- drivetrain: one of Swerve, Tank/Differential, Mechanum, or other clear label
+- shooter_count: integer count of scoring shooters (0 if intake-only / no shooter)
+- shooter_type: e.g. Single Flywheel, Dual Flywheel, Turreted, Fixed Angle, Catapult/Pneumatic, No Shooter/Intake Only
+- endgame_mechanism: e.g. Elevator Climber, Winch, Arm, Hook, None/Park
+- ai_confidence: 0–1 confidence in these mechanical classifications
+
 DETAILED PHASE TIMELINE (required):
 Provide structured MM:SS timestamps for the focus team${focusTeamNumber ? ` (Team ${focusTeamNumber})` : ""}:
 - Autonomous: start position, pre-load scored, mobility
@@ -84,6 +93,11 @@ Return ONLY valid JSON with this exact shape (every field required; use 0 when u
   "climb_pct": number,
   "vision_conf": number,
   "weighted_score": number,
+  "drivetrain": string,
+  "shooter_count": number,
+  "shooter_type": string,
+  "endgame_mechanism": string,
+  "ai_confidence": number,
   "phaseTimeline": {
     "autonomous": {
       "startPosition": "MM:SS — description",
@@ -138,6 +152,11 @@ COMPARE METRIC RULES (focus team):
 - vision_conf: 0–1 overall vision confidence for focus-team tracking.
 - weighted_score: ai_auto*1.2 + ai_teleop*1.5 + ai_endgame*1.1 + climb_pct*10 + vision_conf*5.
 
+ROBOT FEATURE RULES (focus team):
+- drivetrain / shooter_type / endgame_mechanism must be non-empty strings (use "Unconfirmed" only if truly impossible to tell).
+- shooter_count is an integer >= 0.
+- ai_confidence is 0–1 for the mechanical classification (may differ from vision_conf).
+
 Rules:
 - Use team keys like frc2186 (lowercase frc prefix).
 - Include EVERY alliance robot in summary.autoPoints, teleopCycles, endgamePoints, and robotPoints.
@@ -146,7 +165,7 @@ Rules:
 - Cross-check TBA per-robot fields (autoLineRobotN, endGameRobotN) when present.
 - aiRedTotal/aiBlueTotal should approximate summed individual robot contributions for each alliance.
 - delta is absolute difference between TBA alliance totals and AI-estimated totals.
-- Never omit ai_auto, ai_teleop, ai_endgame, climb_pct, vision_conf, or weighted_score — default each to 0 if unknown.`;
+- Never omit ai_auto, ai_teleop, ai_endgame, climb_pct, vision_conf, weighted_score, drivetrain, shooter_count, shooter_type, endgame_mechanism, or ai_confidence.`;
 }
 
 function formatMmSs(totalSec: number): string {

@@ -10,6 +10,7 @@ import {
 } from "@/lib/api/statbotics-client";
 import {
   extractEpaValue,
+  extractStatboticsMetrics,
   extractWinRate,
   hasUsableEpaMetrics,
   yearFromEventKey,
@@ -40,10 +41,21 @@ function withNormalizedMetrics(
   payload: Record<string, unknown>,
   fallback: string,
 ): Record<string, unknown> {
-  return {
-    ...payload,
+  const metrics = {
     epa: extractEpaValue(payload) ?? null,
     win_rate: extractWinRate(payload) ?? null,
+  };
+  const detailed = extractStatboticsMetrics(payload);
+  return {
+    ...payload,
+    ...metrics,
+    epa_auto: detailed.auto ?? null,
+    epa_teleop: detailed.teleop ?? null,
+    epa_endgame: detailed.endgame ?? null,
+    // Keep flat auto/teleop/endgame aliases for browser extractors.
+    ...(detailed.auto != null ? { auto: detailed.auto } : {}),
+    ...(detailed.teleop != null ? { teleop: detailed.teleop } : {}),
+    ...(detailed.endgame != null ? { endgame: detailed.endgame } : {}),
     _fallback: fallback,
   };
 }

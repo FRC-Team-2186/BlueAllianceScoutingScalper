@@ -7,6 +7,7 @@ import { APP_CONFIG, hasGeminiApiKey } from "@/lib/config";
 import {
   MatchAnalysisSchema,
   normalizeCompareMetrics,
+  normalizeRobotFeatures,
   type MatchAnalysis,
 } from "@/lib/types/analysis";
 import type { TbaMatch } from "@/lib/types/tba";
@@ -18,6 +19,20 @@ const GeminiResponseSchema = z.object({
   climb_pct: z.number(),
   vision_conf: z.number(),
   weighted_score: z.number(),
+  drivetrain: z.string().optional(),
+  shooter_count: z.number().optional(),
+  shooter_type: z.string().optional(),
+  endgame_mechanism: z.string().optional(),
+  ai_confidence: z.number().optional(),
+  robotFeatures: z
+    .object({
+      drivetrain: z.string(),
+      shooter_count: z.number(),
+      shooter_type: z.string(),
+      endgame_mechanism: z.string(),
+      ai_confidence: z.number(),
+    })
+    .optional(),
   phaseTimeline: z
     .object({
       autonomous: z
@@ -106,6 +121,11 @@ export const GEMINI_COMPARE_RESPONSE_SCHEMA: ResponseSchema = {
     climb_pct: { type: SchemaType.NUMBER },
     vision_conf: { type: SchemaType.NUMBER },
     weighted_score: { type: SchemaType.NUMBER },
+    drivetrain: { type: SchemaType.STRING },
+    shooter_count: { type: SchemaType.NUMBER },
+    shooter_type: { type: SchemaType.STRING },
+    endgame_mechanism: { type: SchemaType.STRING },
+    ai_confidence: { type: SchemaType.NUMBER },
     phaseTimeline: {
       type: SchemaType.OBJECT,
       properties: {
@@ -216,6 +236,11 @@ export const GEMINI_COMPARE_RESPONSE_SCHEMA: ResponseSchema = {
     "climb_pct",
     "vision_conf",
     "weighted_score",
+    "drivetrain",
+    "shooter_count",
+    "shooter_type",
+    "endgame_mechanism",
+    "ai_confidence",
     "actions",
     "summary",
   ],
@@ -254,6 +279,11 @@ function coerceNumber(value: unknown, fallback = 0): number {
 }
 
 function ensureCompareKeys(raw: Record<string, unknown>): Record<string, unknown> {
+  const nestedFeatures =
+    raw.robotFeatures && typeof raw.robotFeatures === "object"
+      ? (raw.robotFeatures as Record<string, unknown>)
+      : {};
+
   return {
     ...raw,
     ai_auto: coerceNumber(raw.ai_auto),
@@ -262,6 +292,30 @@ function ensureCompareKeys(raw: Record<string, unknown>): Record<string, unknown
     climb_pct: coerceNumber(raw.climb_pct),
     vision_conf: coerceNumber(raw.vision_conf),
     weighted_score: coerceNumber(raw.weighted_score),
+    drivetrain:
+      typeof raw.drivetrain === "string"
+        ? raw.drivetrain
+        : typeof nestedFeatures.drivetrain === "string"
+          ? nestedFeatures.drivetrain
+          : "Unconfirmed",
+    shooter_count: coerceNumber(
+      raw.shooter_count ?? nestedFeatures.shooter_count,
+    ),
+    shooter_type:
+      typeof raw.shooter_type === "string"
+        ? raw.shooter_type
+        : typeof nestedFeatures.shooter_type === "string"
+          ? nestedFeatures.shooter_type
+          : "Unconfirmed",
+    endgame_mechanism:
+      typeof raw.endgame_mechanism === "string"
+        ? raw.endgame_mechanism
+        : typeof nestedFeatures.endgame_mechanism === "string"
+          ? nestedFeatures.endgame_mechanism
+          : "Unconfirmed",
+    ai_confidence: coerceNumber(
+      raw.ai_confidence ?? nestedFeatures.ai_confidence,
+    ),
     actions: Array.isArray(raw.actions) ? raw.actions : [],
     summary:
       raw.summary && typeof raw.summary === "object"
@@ -451,6 +505,16 @@ export async function analyzeFramesWithGemini(
     weighted_score: deriveWeightedScore(parsed),
   });
 
+  const robotFeatures = normalizeRobotFeatures(
+    parsed.robotFeatures ?? {
+      drivetrain: parsed.drivetrain,
+      shooter_count: parsed.shooter_count,
+      shooter_type: parsed.shooter_type,
+      endgame_mechanism: parsed.endgame_mechanism,
+      ai_confidence: parsed.ai_confidence ?? parsed.vision_conf,
+    },
+  );
+
   // Prefer Gemini compare metrics for the focus team in summary maps.
   const summary = { ...parsed.summary };
   if (focusTeamKey) {
@@ -493,6 +557,7 @@ export async function analyzeFramesWithGemini(
     model: APP_CONFIG.geminiModel,
     focusTeamKey,
     compareMetrics,
+    robotFeatures,
     phaseTimeline: parsed.phaseTimeline,
     actions: parsed.actions,
     summary,

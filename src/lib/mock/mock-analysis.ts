@@ -20,6 +20,14 @@ export function createMockAnalysis(
     weighted_score: 6 * 1.2 + 12 * 1.5 + 10 * 1.1 + 1 * 10 + 0.5 * 5,
   };
 
+  const robotFeatures = {
+    drivetrain: "Swerve",
+    shooter_count: 1,
+    shooter_type: "Single Flywheel",
+    endgame_mechanism: "Elevator Climber",
+    ai_confidence: 0.72,
+  };
+
   const base: MatchAnalysis = {
     matchKey: match.key,
     eventKey: match.event_key,
@@ -29,6 +37,7 @@ export function createMockAnalysis(
     model: "mock-v1",
     focusTeamKey: teamKey,
     compareMetrics,
+    robotFeatures,
     phaseTimeline: {
       autonomous: {
         startPosition: "00:00 — mock start",

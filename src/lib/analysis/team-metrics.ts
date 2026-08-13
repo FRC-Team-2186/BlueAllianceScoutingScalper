@@ -1,5 +1,14 @@
-import type { CompareMetrics, MatchAnalysis } from "@/lib/types/analysis";
-import { normalizeCompareMetrics } from "@/lib/types/analysis";
+import type {
+  CompareMetrics,
+  MatchAnalysis,
+  RobotFeatures,
+} from "@/lib/types/analysis";
+import {
+  emptyRobotFeatures,
+  normalizeCompareMetrics,
+  normalizeRobotFeatures,
+  UNCONFIRMED_ROBOT_FEATURE,
+} from "@/lib/types/analysis";
 
 /** Aggregated AI metrics using the strict compare schema keys. */
 export interface TeamAiMetrics {
@@ -23,6 +32,13 @@ export interface TeamAiMetrics {
   climb_pct: number;
   vision_conf: number;
   weighted_score: number;
+  /** Gemini visual/mechanical classifications. */
+  drivetrain: string;
+  shooter_count: number;
+  shooter_type: string;
+  endgame_mechanism: string;
+  ai_confidence: number;
+  featuresConfirmed: boolean;
   verifiedVideo: boolean;
   sources: Array<MatchAnalysis["source"]>;
 }
@@ -30,6 +46,24 @@ export interface TeamAiMetrics {
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function majorityString(values: string[], fallback: string): string {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === UNCONFIRMED_ROBOT_FEATURE) continue;
+    counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
+  }
+  let best = fallback;
+  let bestCount = 0;
+  for (const [value, count] of counts.entries()) {
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  }
+  return best;
 }
 
 function hasClimbAction(analysis: MatchAnalysis, teamKey: string): boolean {
@@ -83,12 +117,28 @@ function metricsFromAnalysis(
   });
 }
 
+function featuresFromAnalysis(
+  analysis: MatchAnalysis,
+  teamKey: string,
+): RobotFeatures | null {
+  if (
+    analysis.robotFeatures &&
+    (!analysis.focusTeamKey || analysis.focusTeamKey === teamKey)
+  ) {
+    return normalizeRobotFeatures(analysis.robotFeatures);
+  }
+  return null;
+}
+
 export function aggregateTeamAiMetrics(
   analyses: MatchAnalysis[],
   teamKey: string,
 ): TeamAiMetrics | null {
   const relevant = analyses.filter((analysis) => {
-    if (analysis.focusTeamKey === teamKey && analysis.compareMetrics) {
+    if (
+      analysis.focusTeamKey === teamKey &&
+      (analysis.compareMetrics || analysis.robotFeatures)
+    ) {
       return true;
     }
     const inSummary =
@@ -110,6 +160,9 @@ export function aggregateTeamAiMetrics(
   const perMatch = relevant.map((analysis) =>
     metricsFromAnalysis(analysis, teamKey),
   );
+  const featureRows = relevant
+    .map((analysis) => featuresFromAnalysis(analysis, teamKey))
+    .filter((row): row is RobotFeatures => row != null);
 
   const ai_auto = average(perMatch.map((m) => m.ai_auto));
   const ai_teleop = average(perMatch.map((m) => m.ai_teleop));
@@ -117,6 +170,33 @@ export function aggregateTeamAiMetrics(
   const climb_pct = average(perMatch.map((m) => m.climb_pct));
   const vision_conf = average(perMatch.map((m) => m.vision_conf));
   const weighted_score = average(perMatch.map((m) => m.weighted_score));
+
+  const empty = emptyRobotFeatures();
+  const featuresConfirmed = featureRows.length > 0;
+  const drivetrain = featuresConfirmed
+    ? majorityString(
+        featureRows.map((row) => row.drivetrain),
+        UNCONFIRMED_ROBOT_FEATURE,
+      )
+    : empty.drivetrain;
+  const shooter_type = featuresConfirmed
+    ? majorityString(
+        featureRows.map((row) => row.shooter_type),
+        UNCONFIRMED_ROBOT_FEATURE,
+      )
+    : empty.shooter_type;
+  const endgame_mechanism = featuresConfirmed
+    ? majorityString(
+        featureRows.map((row) => row.endgame_mechanism),
+        UNCONFIRMED_ROBOT_FEATURE,
+      )
+    : empty.endgame_mechanism;
+  const shooter_count = featuresConfirmed
+    ? Math.round(average(featureRows.map((row) => row.shooter_count)))
+    : 0;
+  const ai_confidence = featuresConfirmed
+    ? average(featureRows.map((row) => row.ai_confidence))
+    : average(perMatch.map((m) => m.vision_conf));
 
   const team = Number(teamKey.replace(/^frc/i, ""));
   const verifiedVideo = relevant.some(
@@ -138,6 +218,12 @@ export function aggregateTeamAiMetrics(
     climb_pct,
     vision_conf,
     weighted_score,
+    drivetrain,
+    shooter_count,
+    shooter_type,
+    endgame_mechanism,
+    ai_confidence,
+    featuresConfirmed,
     verifiedVideo,
     sources: [...new Set(relevant.map((analysis) => analysis.source))],
   };

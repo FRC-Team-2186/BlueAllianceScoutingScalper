@@ -1,5 +1,11 @@
 import Papa from "papaparse";
 import type { MatchAnalysis } from "@/lib/types/analysis";
+import {
+  formatRobotFeatureText,
+  formatShooterCount,
+  TBD_ROBOT_FEATURE,
+  UNCONFIRMED_ROBOT_FEATURE,
+} from "@/lib/types/analysis";
 
 export function exportAnalysisJson(analysis: MatchAnalysis): string {
   return JSON.stringify(analysis, null, 2);
@@ -37,39 +43,32 @@ export function downloadTextFile(
   URL.revokeObjectURL(url);
 }
 
-/** Strict compare metric keys — table headers map 1:1 to these. */
-export type CompareMetricKey =
-  | "ai_auto"
-  | "ai_teleop"
-  | "ai_endgame"
-  | "climb_pct"
-  | "vision_conf"
-  | "weighted_score";
+export type CompareSortKey =
+  | "epa"
+  | "epaAuto"
+  | "epaTeleop"
+  | "epaEndgame"
+  | "winrate"
+  | "ai_confidence"
+  | "shooter_count";
 
 export interface ComparisonRow {
   team: number;
   teamKey: string;
   nickname?: string;
+  /** Statbotics total / norm EPA */
   epa?: number;
+  epaAuto?: number;
+  epaTeleop?: number;
+  epaEndgame?: number;
   winrate?: number;
-  autoPoints: number;
-  teleopCycles: number;
-  endgamePoints: number;
-  defenseRating: number;
-  /** Averaged single-robot TBA/AI point contributions */
-  soloAuto?: number;
-  soloTeleop?: number;
-  soloEndgame?: number;
-  soloTotal?: number;
-  soloMatchCount?: number;
-  soloSource?: string;
-  /** Strict schema keys used by /compare headers. */
-  ai_auto: number;
-  ai_teleop: number;
-  ai_endgame: number;
-  climb_pct: number;
-  vision_conf: number;
-  weighted_score: number;
+  /** Gemini robot features */
+  drivetrain: string;
+  shooter_count: number | null;
+  shooter_type: string;
+  endgame_mechanism: string;
+  ai_confidence?: number;
+  featuresConfirmed: boolean;
   verifiedVideo: boolean;
   aiMatchCount: number;
   dataSource: "verified-video" | "statbotics" | "mixed";
@@ -87,18 +86,33 @@ export function formatCompareCell(
   options?: {
     digits?: number;
     asPercent?: boolean;
-    emptyAs?: "0" | "N/A";
+    emptyAs?: "0" | "N/A" | "TBD";
   },
 ): string {
   const emptyAs = options?.emptyAs ?? "0";
   if (value == null || Number.isNaN(value)) {
-    return emptyAs === "0" ? "0" : "N/A";
+    if (emptyAs === "0") return "0";
+    if (emptyAs === "TBD") return TBD_ROBOT_FEATURE;
+    return "N/A";
   }
   if (options?.asPercent) {
     return `${Math.round(value * 100)}%`;
   }
   const digits = options?.digits ?? 1;
   return value.toFixed(digits);
+}
+
+export function formatFeatureCell(
+  value: string | null | undefined,
+): string {
+  return formatRobotFeatureText(value);
+}
+
+export function formatShootersCell(
+  count: number | null | undefined,
+  confirmed: boolean,
+): string {
+  return formatShooterCount(count, confirmed);
 }
 
 export function exportComparisonCsv(rows: ComparisonRow[]): string {
@@ -108,13 +122,15 @@ export function exportComparisonCsv(rows: ComparisonRow[]): string {
       teamKey: row.teamKey,
       nickname: row.nickname ?? "",
       epa: row.epa ?? "N/A",
+      epa_auto: row.epaAuto ?? "N/A",
+      epa_teleop: row.epaTeleop ?? "N/A",
+      epa_endgame: row.epaEndgame ?? "N/A",
       winrate: row.winrate ?? "N/A",
-      ai_auto: row.ai_auto,
-      ai_teleop: row.ai_teleop,
-      ai_endgame: row.ai_endgame,
-      climb_pct: row.climb_pct,
-      vision_conf: row.vision_conf,
-      weighted_score: row.weighted_score,
+      drivetrain: row.drivetrain || UNCONFIRMED_ROBOT_FEATURE,
+      shooters: formatShootersCell(row.shooter_count, row.featuresConfirmed),
+      shooter_type: row.shooter_type || UNCONFIRMED_ROBOT_FEATURE,
+      endgame_mechanism: row.endgame_mechanism || UNCONFIRMED_ROBOT_FEATURE,
+      ai_confidence: row.ai_confidence ?? "TBD",
       verifiedVideo: row.verifiedVideo,
       dataSource: row.dataSource,
     })),
@@ -123,49 +139,4 @@ export function exportComparisonCsv(rows: ComparisonRow[]): string {
 
 export function exportComparisonJson(rows: ComparisonRow[]): string {
   return JSON.stringify(rows, null, 2);
-}
-
-export function computeWeightedScore(row: {
-  ai_auto?: number | null;
-  ai_teleop?: number | null;
-  ai_endgame?: number | null;
-  climb_pct?: number | null;
-  vision_conf?: number | null;
-  autoPoints?: number;
-  teleopCycles?: number;
-  endgamePoints?: number;
-  defenseRating?: number;
-  epa?: number;
-  soloAuto?: number;
-  soloTeleop?: number;
-  soloEndgame?: number;
-  weighted_score?: number | null;
-}): number {
-  if (row.weighted_score != null && Number.isFinite(row.weighted_score)) {
-    return row.weighted_score;
-  }
-
-  const ai_auto = metricOrZero(
-    row.ai_auto ?? row.soloAuto ?? row.autoPoints,
-  );
-  const ai_teleop = metricOrZero(
-    row.ai_teleop ?? row.soloTeleop ?? row.teleopCycles,
-  );
-  const ai_endgame = metricOrZero(
-    row.ai_endgame ?? row.soloEndgame ?? row.endgamePoints,
-  );
-  const climb_pct = metricOrZero(row.climb_pct);
-  const vision_conf = metricOrZero(row.vision_conf);
-  const epaComponent = (row.epa ?? 1500) / 100;
-  const defense = (row.defenseRating ?? 0.5) * 10;
-
-  return (
-    ai_auto * 1.2 +
-    ai_teleop * 1.5 +
-    ai_endgame * 1.1 +
-    climb_pct * 10 +
-    vision_conf * 5 +
-    epaComponent +
-    defense
-  );
 }

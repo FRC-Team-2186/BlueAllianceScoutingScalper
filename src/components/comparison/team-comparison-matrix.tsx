@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, Database, Eye, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -28,34 +28,28 @@ import { useEventAiSummary } from "@/hooks/use-analysis";
 import { useScoutFilters } from "@/hooks/use-scout-filters";
 import { useHomeTeam } from "@/hooks/use-home-team";
 import {
-  computeWeightedScore,
   downloadTextFile,
   exportComparisonCsv,
   exportComparisonJson,
   formatCompareCell,
+  formatFeatureCell,
+  formatShootersCell,
   metricOrZero,
   type ComparisonRow,
-  type CompareMetricKey,
+  type CompareSortKey,
 } from "@/lib/export/analysis-export";
-import { fetchSoloPoints } from "@/hooks/use-solo-points";
 import { fetchStatboticsComparisonMetrics } from "@/lib/api/statbotics-browser";
 import { ensureCompareClientSchemaVersion } from "@/lib/cache/force-refresh";
 import { defaultCompareTeams } from "@/lib/home-team";
+import {
+  UNCONFIRMED_ROBOT_FEATURE,
+  TBD_ROBOT_FEATURE,
+} from "@/lib/types/analysis";
 import { PUBLIC_CONFIG } from "@/lib/config/public";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-type SortMetric =
-  | CompareMetricKey
-  | "epa"
-  | "soloAuto"
-  | "soloTeleop"
-  | "soloEndgame"
-  | "soloTotal"
-  | "autoPoints"
-  | "teleopCycles"
-  | "endgamePoints"
-  | "defenseRating";
+type SortMetric = CompareSortKey;
 
 interface TeamComparisonMatrixProps {
   initialEventKey?: string;
@@ -67,33 +61,6 @@ function parseTeamsInput(value: string): number[] {
     .split(/[,\s]+/)
     .map((part) => Number.parseInt(part.trim(), 10))
     .filter((team) => Number.isFinite(team) && team > 0);
-}
-
-function DataSourceBadge({ row }: { row: ComparisonRow }) {
-  if (row.verifiedVideo) {
-    return (
-      <Badge className="gap-1 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-        <CheckCircle2 className="size-3" />
-        Verified Video
-      </Badge>
-    );
-  }
-
-  if (row.dataSource === "statbotics") {
-    return (
-      <Badge variant="outline" className="gap-1">
-        <Database className="size-3" />
-        Statbotics / TBA
-      </Badge>
-    );
-  }
-
-  return (
-    <Badge variant="secondary" className="gap-1">
-      <Eye className="size-3" />
-      Mixed
-    </Badge>
-  );
 }
 
 function TeamComparisonMatrixInner({
@@ -131,9 +98,7 @@ function TeamComparisonMatrixInner({
   const teams = teamsOverride ?? derivedTeams;
   const teamsInputValue =
     teamsInput || (homeTeamHydrated ? teams.join(", ") : String(homeTeamNumber));
-  const [sortMetric, setSortMetric] = useState<SortMetric>("weighted_score");
-  const [showAiColumns, setShowAiColumns] = useState(true);
-  const [showSoloColumns, setShowSoloColumns] = useState(true);
+  const [sortMetric, setSortMetric] = useState<SortMetric>("epa");
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [analysisQueued, setAnalysisQueued] = useState(false);
   const force = forceFromUrl;
@@ -150,7 +115,6 @@ function TeamComparisonMatrixInner({
   useEffect(() => {
     void queryClient.invalidateQueries({ queryKey: ["event-ai-summary"] });
     void queryClient.invalidateQueries({ queryKey: ["comparison-statbotics"] });
-    void queryClient.invalidateQueries({ queryKey: ["comparison-solo-points"] });
   }, [year, eventKey, teams, queryClient]);
 
   const aiSummaryQuery = useEventAiSummary(eventKey, { force });
@@ -255,21 +219,6 @@ function TeamComparisonMatrixInner({
     })),
   });
 
-  const soloQueries = useQueries({
-    queries: teams.map((team) => ({
-      queryKey: [
-        "comparison-solo-points",
-        team,
-        eventKey,
-        force ? "force" : "cache",
-        refreshNonce,
-      ],
-      queryFn: () => fetchSoloPoints(team, eventKey, { force }),
-      enabled: Boolean(team && eventKey),
-      staleTime: force ? 0 : 30_000,
-    })),
-  });
-
   useEffect(() => {
     for (const [index, query] of statboticsQueries.entries()) {
       if (query.isError) {
@@ -296,52 +245,32 @@ function TeamComparisonMatrixInner({
       const teamKey = `frc${team}`;
       const stats = statboticsQueries[index]?.data;
       const ai = aiByTeam.get(teamKey);
-      const solo = soloQueries[index]?.data?.averages;
-      const epa = stats?.epa;
-      const soloAuto = solo?.auto ?? ai?.ai_auto ?? ai?.aiAutoScore;
-      const soloTeleop = solo?.teleop ?? ai?.ai_teleop ?? ai?.aiTeleopCycles;
-      const soloEndgame = solo?.endgame ?? ai?.ai_endgame ?? ai?.aiEndgamePoints;
-      const autoPoints = metricOrZero(soloAuto ?? stats?.auto);
-      const teleopCycles = metricOrZero(soloTeleop ?? stats?.teleop);
-      const endgamePoints = metricOrZero(soloEndgame ?? stats?.endgame);
-      const defenseRating = 0.5;
       const verifiedVideo = Boolean(ai?.verifiedVideo);
+      const featuresConfirmed = Boolean(ai?.featuresConfirmed);
 
-      const ai_auto = metricOrZero(ai?.ai_auto ?? ai?.aiAutoScore);
-      const ai_teleop = metricOrZero(ai?.ai_teleop ?? ai?.aiTeleopCycles);
-      const ai_endgame = metricOrZero(ai?.ai_endgame ?? ai?.aiEndgamePoints);
-      const climb_pct = metricOrZero(ai?.climb_pct ?? ai?.endgameClimbRate);
-      const vision_conf = metricOrZero(ai?.vision_conf ?? ai?.visionConfidence);
-
-      const base: ComparisonRow = {
+      return {
         team,
         teamKey,
         nickname: stats?.nickname,
-        epa,
+        epa: stats?.epa,
+        epaAuto: stats?.auto,
+        epaTeleop: stats?.teleop,
+        epaEndgame: stats?.endgame,
         winrate: stats?.winrate,
-        autoPoints,
-        teleopCycles,
-        endgamePoints,
-        defenseRating,
-        soloAuto: soloAuto == null ? undefined : metricOrZero(soloAuto),
-        soloTeleop: soloTeleop == null ? undefined : metricOrZero(soloTeleop),
-        soloEndgame:
-          soloEndgame == null ? undefined : metricOrZero(soloEndgame),
-        soloTotal: solo?.total ?? (
-          soloAuto != null || soloTeleop != null || soloEndgame != null
-            ? metricOrZero(soloAuto) +
-              metricOrZero(soloTeleop) +
-              metricOrZero(soloEndgame)
-            : undefined
-        ),
-        soloMatchCount: solo?.matchCount ?? soloQueries[index]?.data?.matchCount,
-        soloSource: solo?.source,
-        ai_auto,
-        ai_teleop,
-        ai_endgame,
-        climb_pct,
-        vision_conf,
-        weighted_score: metricOrZero(ai?.weighted_score),
+        drivetrain: featuresConfirmed
+          ? formatFeatureCell(ai?.drivetrain)
+          : UNCONFIRMED_ROBOT_FEATURE,
+        shooter_count: featuresConfirmed ? (ai?.shooter_count ?? null) : null,
+        shooter_type: featuresConfirmed
+          ? formatFeatureCell(ai?.shooter_type)
+          : UNCONFIRMED_ROBOT_FEATURE,
+        endgame_mechanism: featuresConfirmed
+          ? formatFeatureCell(ai?.endgame_mechanism)
+          : UNCONFIRMED_ROBOT_FEATURE,
+        ai_confidence: featuresConfirmed
+          ? (ai?.ai_confidence ?? ai?.vision_conf ?? ai?.visionConfidence)
+          : undefined,
+        featuresConfirmed,
         verifiedVideo,
         aiMatchCount: ai?.matchCount ?? 0,
         epaSource: stats?.source,
@@ -351,16 +280,11 @@ function TeamComparisonMatrixInner({
             ? "mixed"
             : "statbotics",
       };
-
-      return {
-        ...base,
-        weighted_score: computeWeightedScore(base),
-      };
     });
 
     return comparisonRows.sort((a, b) => {
-      const left = metricOrZero(a[sortMetric as keyof ComparisonRow] as number);
-      const right = metricOrZero(b[sortMetric as keyof ComparisonRow] as number);
+      const left = metricOrZero(a[sortMetric] as number | undefined);
+      const right = metricOrZero(b[sortMetric] as number | undefined);
       return right - left;
     });
     // year/eventKey/refreshNonce force a full matrix rebuild when filters or force-refresh change
@@ -372,7 +296,6 @@ function TeamComparisonMatrixInner({
     sortMetric,
     aiSummaryQuery.data,
     statboticsQueries,
-    soloQueries,
     refreshNonce,
   ]);
 
@@ -446,9 +369,6 @@ function TeamComparisonMatrixInner({
           await queryClient.invalidateQueries({
             queryKey: ["comparison-statbotics"],
           });
-          await queryClient.invalidateQueries({
-            queryKey: ["comparison-solo-points"],
-          });
 
           setRefreshNonce((value) => value + 1);
 
@@ -486,7 +406,6 @@ function TeamComparisonMatrixInner({
   const isLoading =
     isRefreshing ||
     statboticsQueries.some((query) => query.isFetching) ||
-    soloQueries.some((query) => query.isFetching) ||
     aiSummaryQuery.isFetching;
 
   return (
@@ -540,39 +459,15 @@ function TeamComparisonMatrixInner({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="weighted_score">weighted_score</SelectItem>
-            <SelectItem value="ai_auto">ai_auto</SelectItem>
-            <SelectItem value="ai_teleop">ai_teleop</SelectItem>
-            <SelectItem value="ai_endgame">ai_endgame</SelectItem>
-            <SelectItem value="climb_pct">climb_pct</SelectItem>
-            <SelectItem value="vision_conf">vision_conf</SelectItem>
-            <SelectItem value="soloAuto">Solo Auto</SelectItem>
-            <SelectItem value="soloTeleop">Solo Teleop</SelectItem>
-            <SelectItem value="soloEndgame">Solo Endgame</SelectItem>
-            <SelectItem value="soloTotal">Solo Total</SelectItem>
-            <SelectItem value="autoPoints">Auto points</SelectItem>
-            <SelectItem value="teleopCycles">Teleop cycles</SelectItem>
-            <SelectItem value="endgamePoints">Endgame points</SelectItem>
-            <SelectItem value="defenseRating">Defense rating</SelectItem>
-            <SelectItem value="epa">EPA</SelectItem>
+            <SelectItem value="epa">Statbotics EPA</SelectItem>
+            <SelectItem value="epaAuto">Auto EPA</SelectItem>
+            <SelectItem value="epaTeleop">Teleop EPA</SelectItem>
+            <SelectItem value="epaEndgame">Endgame EPA</SelectItem>
+            <SelectItem value="winrate">Win Rate</SelectItem>
+            <SelectItem value="ai_confidence">AI Conf</SelectItem>
+            <SelectItem value="shooter_count">Shooters</SelectItem>
           </SelectContent>
         </Select>
-
-        <Button
-          variant={showSoloColumns ? "default" : "outline"}
-          size="sm"
-          onClick={() => setShowSoloColumns((value) => !value)}
-        >
-          {showSoloColumns ? "Hide solo points" : "Show solo points"}
-        </Button>
-
-        <Button
-          variant={showAiColumns ? "default" : "outline"}
-          size="sm"
-          onClick={() => setShowAiColumns((value) => !value)}
-        >
-          {showAiColumns ? "Hide AI columns" : "Show AI columns"}
-        </Button>
 
         {force && (
           <Badge variant="destructive">force refresh</Badge>
@@ -607,27 +502,16 @@ function TeamComparisonMatrixInner({
             <TableRow>
               <TableHead>Rank</TableHead>
               <TableHead>Team</TableHead>
-              <TableHead>Source</TableHead>
-              <TableHead>EPA</TableHead>
+              <TableHead>Statbotics EPA</TableHead>
+              <TableHead>Auto EPA</TableHead>
+              <TableHead>Teleop EPA</TableHead>
+              <TableHead>Endgame EPA</TableHead>
               <TableHead>Win Rate</TableHead>
-              {showSoloColumns && (
-                <>
-                  <TableHead>Solo Auto</TableHead>
-                  <TableHead>Solo Teleop</TableHead>
-                  <TableHead>Solo Endgame</TableHead>
-                  <TableHead>Solo Total</TableHead>
-                </>
-              )}
-              {showAiColumns && (
-                <>
-                  <TableHead>ai_auto</TableHead>
-                  <TableHead>ai_teleop</TableHead>
-                  <TableHead>ai_endgame</TableHead>
-                  <TableHead>climb_pct</TableHead>
-                  <TableHead>vision_conf</TableHead>
-                </>
-              )}
-              <TableHead>weighted_score</TableHead>
+              <TableHead>Drivetrain</TableHead>
+              <TableHead>Shooters</TableHead>
+              <TableHead>Shooter Type</TableHead>
+              <TableHead>Endgame Mechanism</TableHead>
+              <TableHead>AI Conf</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -641,9 +525,6 @@ function TeamComparisonMatrixInner({
                   <div className="font-medium">{row.team}</div>
                   <div className="text-xs text-muted-foreground">
                     {row.nickname ?? row.teamKey}
-                    {row.soloMatchCount
-                      ? ` · ${row.soloMatchCount} scored match${row.soloMatchCount === 1 ? "" : "es"}`
-                      : ""}
                     {row.aiMatchCount > 0
                       ? ` · ${row.aiMatchCount} analyzed`
                       : ""}
@@ -655,59 +536,43 @@ function TeamComparisonMatrixInner({
                   </div>
                 </TableCell>
                 <TableCell>
-                  <DataSourceBadge row={row} />
+                  {formatCompareCell(row.epa, { digits: 1, emptyAs: "N/A" })}
                 </TableCell>
                 <TableCell>
-                  {formatCompareCell(row.epa, { digits: 0, emptyAs: "N/A" })}
+                  {formatCompareCell(row.epaAuto, { digits: 1, emptyAs: "N/A" })}
+                </TableCell>
+                <TableCell>
+                  {formatCompareCell(row.epaTeleop, {
+                    digits: 1,
+                    emptyAs: "N/A",
+                  })}
+                </TableCell>
+                <TableCell>
+                  {formatCompareCell(row.epaEndgame, {
+                    digits: 1,
+                    emptyAs: "N/A",
+                  })}
                 </TableCell>
                 <TableCell>
                   {row.winrate == null
                     ? "N/A"
                     : `${(row.winrate * 100).toFixed(1)}%`}
                 </TableCell>
-                {showSoloColumns && (
-                  <>
-                    <TableCell>
-                      {formatCompareCell(row.soloAuto, { emptyAs: "0" })}
-                    </TableCell>
-                    <TableCell>
-                      {formatCompareCell(row.soloTeleop, { emptyAs: "0" })}
-                    </TableCell>
-                    <TableCell>
-                      {formatCompareCell(row.soloEndgame, { emptyAs: "0" })}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {formatCompareCell(row.soloTotal, { emptyAs: "0" })}
-                    </TableCell>
-                  </>
-                )}
-                {showAiColumns && (
-                  <>
-                    <TableCell>
-                      {formatCompareCell(row.ai_auto, { emptyAs: "0" })}
-                    </TableCell>
-                    <TableCell>
-                      {formatCompareCell(row.ai_teleop, { emptyAs: "0" })}
-                    </TableCell>
-                    <TableCell>
-                      {formatCompareCell(row.ai_endgame, { emptyAs: "0" })}
-                    </TableCell>
-                    <TableCell>
-                      {formatCompareCell(row.climb_pct, {
+                <TableCell>{formatFeatureCell(row.drivetrain)}</TableCell>
+                <TableCell>
+                  {formatShootersCell(row.shooter_count, row.featuresConfirmed)}
+                </TableCell>
+                <TableCell>{formatFeatureCell(row.shooter_type)}</TableCell>
+                <TableCell>
+                  {formatFeatureCell(row.endgame_mechanism)}
+                </TableCell>
+                <TableCell>
+                  {row.featuresConfirmed
+                    ? formatCompareCell(row.ai_confidence, {
                         asPercent: true,
-                        emptyAs: "0",
-                      })}
-                    </TableCell>
-                    <TableCell>
-                      {formatCompareCell(row.vision_conf, {
-                        asPercent: true,
-                        emptyAs: "0",
-                      })}
-                    </TableCell>
-                  </>
-                )}
-                <TableCell className="font-medium">
-                  {formatCompareCell(row.weighted_score, { emptyAs: "0" })}
+                        emptyAs: "TBD",
+                      })
+                    : TBD_ROBOT_FEATURE}
                 </TableCell>
               </TableRow>
             ))}

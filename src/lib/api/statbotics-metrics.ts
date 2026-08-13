@@ -97,12 +97,40 @@ export function extractStatboticsMetrics(
 ): ExtractedStatboticsMetrics {
   const nested =
     source.epa && typeof source.epa === "object" ? source.epa : undefined;
+  const record = source as StatboticsMetricSource & {
+    auto?: unknown;
+    teleop?: unknown;
+    endgame?: unknown;
+    epa_auto?: unknown;
+    epa_teleop?: unknown;
+    epa_endgame?: unknown;
+  };
+
+  const auto =
+    (nested ? nestedMean(nested.auto) ?? asFiniteNumber(nested.auto) : undefined) ??
+    asFiniteNumber(record.auto) ??
+    nestedMean(record.epa_auto) ??
+    asFiniteNumber(record.epa_auto);
+  const teleop =
+    (nested
+      ? nestedMean(nested.teleop) ?? asFiniteNumber(nested.teleop)
+      : undefined) ??
+    asFiniteNumber(record.teleop) ??
+    nestedMean(record.epa_teleop) ??
+    asFiniteNumber(record.epa_teleop);
+  const endgame =
+    (nested
+      ? nestedMean(nested.endgame) ?? asFiniteNumber(nested.endgame)
+      : undefined) ??
+    asFiniteNumber(record.endgame) ??
+    nestedMean(record.epa_endgame) ??
+    asFiniteNumber(record.epa_endgame);
 
   return {
     epa: extractEpaValue(source),
-    auto: nested ? asFiniteNumber(nested.auto) : undefined,
-    teleop: nested ? asFiniteNumber(nested.teleop) : undefined,
-    endgame: nested ? asFiniteNumber(nested.endgame) : undefined,
+    auto,
+    teleop,
+    endgame,
     winrate: extractWinRate(source),
     fallback: source._fallback,
     nickname: source.name,

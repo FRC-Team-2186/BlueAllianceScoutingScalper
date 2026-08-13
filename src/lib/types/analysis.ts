@@ -27,6 +27,15 @@ export const CompareMetricsSchema = z.object({
   weighted_score: z.number(),
 });
 
+/** Gemini visual/mechanical robot feature classification for /compare. */
+export const RobotFeaturesSchema = z.object({
+  drivetrain: z.string(),
+  shooter_count: z.number(),
+  shooter_type: z.string(),
+  endgame_mechanism: z.string(),
+  ai_confidence: z.number(),
+});
+
 export const PhaseTimelineSchema = z.object({
   autonomous: z
     .object({
@@ -76,6 +85,8 @@ export const MatchAnalysisSchema = z.object({
   focusTeamKey: z.string().optional(),
   /** Strict compare keys from Gemini (never null after normalize). */
   compareMetrics: CompareMetricsSchema.optional(),
+  /** Visual/mechanical robot feature extraction from Gemini. */
+  robotFeatures: RobotFeaturesSchema.optional(),
   phaseTimeline: PhaseTimelineSchema.optional(),
   actions: z.array(AnalysisActionSchema),
   summary: z.object({
@@ -101,6 +112,7 @@ export type AnalysisAction = z.infer<typeof AnalysisActionSchema>;
 export type MatchAnalysis = z.infer<typeof MatchAnalysisSchema>;
 export type RobotPhasePointsStored = z.infer<typeof RobotPhasePointsSchema>;
 export type CompareMetrics = z.infer<typeof CompareMetricsSchema>;
+export type RobotFeatures = z.infer<typeof RobotFeaturesSchema>;
 export type PhaseTimeline = z.infer<typeof PhaseTimelineSchema>;
 
 export interface CacheIndexEntry {
@@ -111,6 +123,9 @@ export interface CacheIndexEntry {
   actionCount: number;
 }
 
+export const UNCONFIRMED_ROBOT_FEATURE = "Unconfirmed";
+export const TBD_ROBOT_FEATURE = "TBD";
+
 export function emptyCompareMetrics(): CompareMetrics {
   return {
     ai_auto: 0,
@@ -119,6 +134,16 @@ export function emptyCompareMetrics(): CompareMetrics {
     climb_pct: 0,
     vision_conf: 0,
     weighted_score: 0,
+  };
+}
+
+export function emptyRobotFeatures(): RobotFeatures {
+  return {
+    drivetrain: UNCONFIRMED_ROBOT_FEATURE,
+    shooter_count: 0,
+    shooter_type: UNCONFIRMED_ROBOT_FEATURE,
+    endgame_mechanism: UNCONFIRMED_ROBOT_FEATURE,
+    ai_confidence: 0,
   };
 }
 
@@ -141,4 +166,57 @@ export function normalizeCompareMetrics(
       ? Number(partial.weighted_score)
       : 0,
   };
+}
+
+export function normalizeRobotFeatures(
+  partial?: Partial<RobotFeatures> | null,
+): RobotFeatures {
+  const base = emptyRobotFeatures();
+  if (!partial) return base;
+
+  const drivetrain =
+    typeof partial.drivetrain === "string" && partial.drivetrain.trim()
+      ? partial.drivetrain.trim()
+      : UNCONFIRMED_ROBOT_FEATURE;
+  const shooter_type =
+    typeof partial.shooter_type === "string" && partial.shooter_type.trim()
+      ? partial.shooter_type.trim()
+      : UNCONFIRMED_ROBOT_FEATURE;
+  const endgame_mechanism =
+    typeof partial.endgame_mechanism === "string" &&
+    partial.endgame_mechanism.trim()
+      ? partial.endgame_mechanism.trim()
+      : UNCONFIRMED_ROBOT_FEATURE;
+
+  return {
+    drivetrain,
+    shooter_count: Number.isFinite(partial.shooter_count)
+      ? Number(partial.shooter_count)
+      : 0,
+    shooter_type,
+    endgame_mechanism,
+    ai_confidence: Number.isFinite(partial.ai_confidence)
+      ? Number(partial.ai_confidence)
+      : 0,
+  };
+}
+
+/** Display helpers for /compare feature cells. */
+export function formatRobotFeatureText(
+  value: string | null | undefined,
+): string {
+  if (value == null || value.trim() === "" || value === "—") {
+    return UNCONFIRMED_ROBOT_FEATURE;
+  }
+  return value;
+}
+
+export function formatShooterCount(
+  value: number | null | undefined,
+  confirmed: boolean,
+): string {
+  if (!confirmed || value == null || Number.isNaN(value)) {
+    return TBD_ROBOT_FEATURE;
+  }
+  return String(value);
 }

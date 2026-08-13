@@ -16,7 +16,8 @@ export default function ComparePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Multi-Team Comparison</h1>
           <p className="text-sm text-muted-foreground">
-            Statbotics EPA plus cached Gemini video analysis with verified-video badges.
+            Statbotics EPA (total/auto/teleop/endgame) plus Gemini robot feature
+            extraction (drivetrain, shooters, endgame mechanism).
           </p>
         </div>
         <Link href="/" className={buttonVariants({ variant: "outline", size: "sm" })}>
@@ -28,10 +29,10 @@ export default function ComparePage() {
         <CardHeader>
           <CardTitle>Comparison Matrix</CardTitle>
           <CardDescription>
-            Statbotics EPA plus Gemini video analysis. Use Force Refresh or
+            Statbotics numeric EPA with Gemini visual/mechanical classification.
+            Missing feature fields show as Unconfirmed / TBD. Use Force Refresh or
             <code className="mx-1 rounded bg-muted px-1">?force=true</code>
-            to bypass stale caches and re-run the current schema.
-            Use the year/event selectors to compare 2025 REEFSCAPE events while 2026 data is sparse.
+            to re-run analysis.
           </CardDescription>
         </CardHeader>
         <CardContent>
